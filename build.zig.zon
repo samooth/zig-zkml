@@ -1,0 +1,7 @@
+.{
+    .name = .zig_zkml,
+    .fingerprint = 0x3d79605f4927d695,
+    .version = "0.1.0",
+    .dependencies = .{},
+    .paths = .{""},
+}
