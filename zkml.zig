@@ -17,6 +17,7 @@ pub const tensor = @import("libs/tensor/root.zig");
 pub const trace = @import("libs/trace/root.zig");
 pub const statement = @import("libs/statement/root.zig");
 pub const attestation = @import("libs/attestation.zig");
+pub const api = @import("libs/api.zig");
 
 comptime {
     // Lazy-analysis trap: re-exported decls are not analyzed until referenced.
@@ -24,6 +25,8 @@ comptime {
     _ = &field.Goldilocks.add;
     _ = &merkle.MerkleTree.hashLeaf;
     _ = &merkle.MerkleTree.proof;
+    _ = &merkle.Builder.finish;
+    _ = &merkle.Proof.serialize;
     _ = &transcript.Transcript.init;
     _ = &transcript.Transcript.challengeU64;
     _ = &tensor.Scheme.magnitudeBound;
@@ -32,6 +35,7 @@ comptime {
     _ = &trace.TraceRecorder.finalize;
     _ = &statement.StatementLayer.serialize;
     _ = &attestation.WeightsAttestor.init;
+    _ = &api.zkml_attestor_create;
 }
 
 test {
@@ -44,4 +48,5 @@ test {
     _ = @import("libs/trace/root.zig");
     _ = @import("libs/statement/root.zig");
     _ = @import("libs/attestation.zig");
+    _ = @import("libs/api.zig");
 }

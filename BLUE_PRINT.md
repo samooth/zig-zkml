@@ -498,40 +498,67 @@ pub const TraceRecorder = struct {
 };
 ```
 
-## 8. C API (superficie aditiva en `kt_kernel.h`)
+## 8. C API (superficie aditiva — zkml_c.h, HECHO para F0/F1)
 
-Patrón de ktransformers-zig: handles opacos, allocator capturado en
-`*_new` (regla B1), `pub export fn` en `main.zig`, gates
-`tools/verify_abi.py` + `tools/audit_layout.py`, emisión forzada con
-`comptime { _ = &mod.fn; }` verificada con `nm`.
+**Implementado** en `libs/api.zig` + `include/zkml_c.h` (ABI v1). Los
+wrappers `kt_*` de ktransformers-zig llaman a estos `zkml_*`; el patrón
+es el mismo: handles opacos, allocator capturado en `*_create` (regla
+B1), emisión forzada con `comptime { _ = &fn; }` verificada con `nm`
+(gate `zig build abi`), y auditor independiente Python
+(`tools/verify_weights.py` — re-implementa hashing y wire format SIN
+compartir código con la librería; gate `zig build verify`).
 
 ```c
-// --- zkML attestation & verifiable inference (experimental) ---
-// F0: attestation de pesos (Blake3 incremental en loadWeights)
-int  kt_weights_merkle_root(KT_MOE* moe, uint8_t root_out[32]);
-int  kt_mla_weights_merkle_root(KT_MLA* mla, uint8_t root_out[32]);
+// --- F0: attestation de pesos (streaming — un add() por tensor en load) ---
+ZKML_Attestor* zkml_attestor_create(void* allocator);        // B1: captura
+int   zkml_attestor_add(ZKML_Attestor*, const char* name, size_t name_len,
+                        const void* data, size_t data_len);  // Blake3 incr.,
+                                                             // data NUNCA se retiene
+int   zkml_attestor_finish(ZKML_Attestor*);                 // root cacheado
+int   zkml_attestor_root(ZKML_Attestor*, uint8_t root_out[32]);
+int   zkml_attestor_proof(ZKML_Attestor*, const char* name, size_t,
+                          uint8_t** out, size_t* len);       // wire "ZKMP" v1
+void  zkml_attestor_free_proof(ZKML_Attestor*, uint8_t*, size_t);
+void  zkml_attestor_destroy(ZKML_Attestor*);                // libera TODO
 
-// F1: sampling determinista
-void kt_transcript_seed(const uint8_t* context, size_t ctx_len,
-                        uint8_t seed_out[32]);
+// --- Verificación standalone: sin runtime, sin modelo, solo root+proof ---
+int   zkml_proof_verify(void* allocator, const uint8_t* proof, size_t len,
+                        const uint8_t* expected_root /*32*/);
 
-// F2+: verifiable inference por capa (handles opacos)
-typedef struct KT_PROVER KT_PROVER;
-KT_PROVER* kt_prover_new(const KT_MOE* moe, const uint8_t* weights_root);
-void kt_prover_free(KT_PROVER* prover);                    // libera TODO el contexto
-int  kt_prove_moe_layer(KT_PROVER* prover, int layer_idx,
-                        const void* input, void* output,
-                        uint8_t** proof_out, size_t* proof_len);
-// FIX B1: la memoria del proof sale del allocator capturado del prover —
-// sin free dedicado no hay forma sana de liberarla.
-void kt_proof_free(KT_PROVER* prover, uint8_t* proof, size_t proof_len);
-int  kt_verify_moe_layer(const KT_MOE* moe, const uint8_t* weights_root,
-                         int layer_idx, const void* input, const void* output,
-                         const uint8_t* proof, size_t proof_len);
+// --- F1: sampling determinista ---
+int   zkml_transcript_seed(const uint8_t* ctx, size_t ctx_len,
+                           uint8_t seed_out[32]);
+
+// --- F2+ (pendiente): verifiable inference por capa ---
+typedef struct ZKML_PROVER ZKML_PROVER;                     // kt_prover_* se
+ZKML_PROVER* zkml_prover_new(...);                          // mapea a esto
+int  zkml_prove_moe_layer(ZKML_PROVER*, int layer_idx, ...);
+int  zkml_verify_moe_layer(const uint8_t* weights_root, int layer_idx, ...);
 ```
 
-`kt_verify_moe_layer` standalone: el verifier no necesita runtime L2/L3
-ni el modelo completo — solo root, statement y proof.
+Wire format del proof (`merkle.Proof.serialize`, versionado — cambia →
+bump de versión en el byte 4):
+
+```
+[4] magic "ZKMP"  [1] version=1  [3] reserved
+[32] leaf hash    [4] leaf index u32LE  [4] sibling count u32LE
+[32*n] siblings (bottom-up)
+```
+
+Reglas de la superficie F0/F1 (lecciones aplicadas):
+- `add` tras `finish` → `ZKML_INVALID_ARGUMENT` (árbol congelado);
+  `finish` es idempotente.
+- 0 tensors + `finish` → error (un root vacío por descuido no es un
+  attestation).
+- nombres duplicados → `ZKML_DUPLICATE_NAME` en `finish` (proofs
+  ambiguos); el estado del builder sigue válido para destroy/retry.
+- destroy de un attestor a medio cargar es seguro (libera los nombres
+  duped); double-destroy del mismo puntero es use-after-free como en
+  cualquier handle C — documentado, no "protegido".
+- `kt_weights_merkle_root`/`kt_mla_weights_merkle_root` (la superficie
+  de §8 original) se implementan como glue 1:1 sobre
+  `zkml_attestor_*` en ktransformers-zig — el hashing vive aquí, la
+  iteración de tensors vive en el loader.
 
 ## 9. Parámetros de seguridad
 
@@ -572,8 +599,8 @@ recalibran con el bench de F2. Los números duros de go/no-go están en §11.
 
 | Fase | Entregable | Deps | Go/no-go |
 |---|---|---|---|
-| **F0** | `kt_weights_merkle_root` (moe+mla) sobre `loadWeights`; test root estable ante reorden de lectura; `verify_weights.py` | ~~zig-algebra `merkle` (o ~200 líneas propias)~~ **HECHO**: libs propias (`merkle`, `attestation`, `transcript`, `statement`) — 32/32 tests, pendiente: integración C API con ktransformers-zig | overhead de carga < 5% |
-| **F1** | `kt_transcript_seed`; sampling reproducible | zig-algebra `hash` | cero cambio en kernels |
+| **F0** | `kt_weights_merkle_root` (moe+mla) sobre `loadWeights`; test root estable ante reorden de lectura; `verify_weights.py` | ~~zig-algebra `merkle` (o ~200 líneas propias)~~ **HECHO**: C ABI `zkml_attestor_*` (`libs/api.zig`, `include/zkml_c.h`) + streaming `Builder` + wire format + `tools/verify_weights.py` (auditor INDEPENDIENTE en Python, cross-verifica root y proofs de Zig) + gates `zig build abi`/`verify` — pendiente: glue `kt_*` en ktransformers-zig | overhead de carga < 5% (por medir en la integración) |
+| **F1** | `kt_transcript_seed`; sampling reproducible | **HECHO (lib)**: `zkml_transcript_seed` en el ABI; falta el glue kt | cero cambio en kernels |
 | **F2** | `libs/tensor` + gadget GEMM v1 (AIR chunk-16) + suite positiva/negativa vs `gemmExpertExact` | zig-zk `air`+`stark`+`transcript` | **Spikes previos**: (1) `zig fetch` semver 0.16.0-dev; (2) STARK/FRI Goldilocks existe o se porta; después: overhead < 100x en shape decode Qwen3-Next (criterio provisional, se fija post-spikes) |
 | **F3** | `kt_prove_moe_layer`/`kt_verify_moe_layer` para 1 experto (Qwen3-Next shape real); binding Poseidon2 traza↔leaf; bench por bloque | F2 | proof < 1 MB, verify < 100 ms, test negativo ±1 ulp RECHAZA |
 | **F4** | fingerprint sumcheck v2 (GKR/zkLLM-style) + multi-bloque con recursion Poseidon2; Groth16 wrap solo si on-chain | zig-zk `sumcheck`, `snark` (si madura) | overhead GEMM < 50x; decisión de producto |
@@ -645,6 +672,20 @@ código demuestre lo contrario:
    (peor) compila con semántica equivocada en sketches.
 6. **`@intCast` a u8 en longitudes**: pánico en safe mode para > 255
    (DeepSeek-V3 tiene 256 expertos/capa). Longitudes serializadas: u32.
+7. **`errdefer` y hand-back en `Builder.finish`**: validación (sort,
+   duplicados) ANTES de extraer los arrays (`toOwnedSlice`); tras extraer,
+   cada path de error devuelve los arrays al builder (estado deinit-able
+   y retryable) — nunca un estado mitad-extraído.
+8. **0.16-dev I/O**: no existe `io.err`/`io.out` en `Io` — stderr va por
+   `std.debug.print` o `std.Io.lockStderr(buf)`; stdout por
+   `std.Io.File.stdout().writer(io, buf)` (método `interface`). Los
+   ArrayList unmanaged NO tienen `.writer(alloc)` — appendSlice/manual.
+   `for (1..n)` con n=0 pana (overflow unsigned): guard `if (n >= 2)`.
+9. **Cross-audit como gate**: el auditor Python re-implementa hashing y
+   wire format desde el spec (cero código compartido con Zig) y
+   verifica los artifacts que genera el ABI run — un bug de
+   implementación no puede esconderse detrás de un bug del auditor.
+   `zig build verify` corre: tests → ABI end-to-end → cross-audit.
 
 ---
 

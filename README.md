@@ -39,32 +39,47 @@ from the root module's file set, so all libs are file imports):
 
 ```
 zkml.zig           # module root — re-exports everything, collects all tests
+include/
+└── zkml_c.h       # C ABI (zkml_* — F0/F1 surface, BLUE_PRINT §8)
 libs/
 ├── field.zig      # [done] Goldilocks p = 2^61−1 (vendored L0)
-├── merkle.zig     # [done] Blake3 tree (cached root, orphan self-pairing)
+├── merkle.zig     # [done] Blake3 tree (cached root, orphan self-pairing,
+│                  #        streaming Builder, "ZKMP" proof wire format)
 ├── transcript.zig # [done] Fiat-Shamir transcript (absorb/challenge)
-├── attestation.zig# [done] WeightsAttestor (F0)
+├── attestation.zig# [done] WeightsAttestor (Zig-level F0 API)
+├── api.zig        # [done] C ABI: zkml_attestor_* / zkml_proof_verify /
+│                  #        zkml_transcript_seed (allocator captured, B1)
 ├── tensor/        # [done] QuantTensor + Scheme + exact q4.22 dequant
 ├── trace/         # [done] TraceRecorder — canonical-order, thread-safe
 ├── statement/     # [done] StatementLayer — public inputs (§6.1)
 ├── gadgets/       # F2+: gemm, quant, nonlin, norm, routing
 ├── compile/       # F3+: CircuitGraph → AirGraph
 └── prove/         # F3+: prove()/verify() orchestration
+tools/
+├── abi_check.zig  # end-to-end ABI runner (dumps artifacts for audit)
+└── verify_weights.py  # INDEPENDENT Python auditor (root + proof wire)
 ```
 
-Build and test:
+Build, test and audit:
 
 ```
-zig build --summary all test   # run the suite (check the test count!)
-zig build fmt                  # formatting gate
+zig build --summary all test    # unit tests (check the test count!)
+zig build --summary all abi     # C-ABI end-to-end + nm symbol gate
+zig build --summary all verify  # tests + ABI + independent Python audit
+zig build fmt                   # formatting gate
 ```
+
+The `verify` step is the F0 acceptance gate: the Zig library generates a
+weights root and an inclusion proof through the exported C API, and
+`tools/verify_weights.py` — which shares **no code** with the library —
+re-derives the root from the manifest and verifies the proof bytes.
 
 ## Roadmap
 
 | Phase | Deliverable | Go/no-go |
 |---|---|---|
-| **F0** | `kt_weights_merkle_root` — weights attestation (Blake3 + Merkle at load time) — **lib done** (`libs/merkle.zig`, `libs/attestation.zig`), C API pending | load overhead < 5% |
-| **F1** | `kt_transcript_seed` — deterministic, auditable sampling — **lib done** (`libs/transcript.zig`, `libs/trace/root.zig` incl. multi-thread determinism test) | zero kernel changes |
+| **F0** | `kt_weights_merkle_root` — weights attestation (Blake3 + Merkle at load time) — **lib + C ABI + independent auditor done** (`zig build verify` gate); ktransformers-zig glue pending | load overhead < 5% |
+| **F1** | `kt_transcript_seed` — deterministic, auditable sampling — **`zkml_transcript_seed` done in the ABI**; kt glue pending | zero kernel changes |
 | **F2** | `tensor` lib + GEMM gadget (AIR) with positive+negative tests — **tensor lib done**; gadget pending | two spikes first: dep toolchain (semver `0.16.0-dev`), STARK/FRI over Goldilocks |
 | **F3** | `kt_prove_moe_layer` / `kt_verify_moe_layer` for one expert (Qwen3-Next shapes) | proof < 1 MB, verify < 100 ms, tampered witness (±1 ulp) rejected |
 | **F4** | fingerprint-sumcheck GEMM + multi-block recursion | product decision |
@@ -74,7 +89,8 @@ Realistic cost expectations (measured against DeepSeek-V3/Qwen3-Next shapes): we
 ## Requirements
 
 - Zig `0.16.0-dev.2535+` (toolchain lock shared with ktransformers-zig)
-- [zig-algebra](https://github.com/samooth/zig-algebra) (L0) and [zig-zk](https://github.com/samooth/zig-zk) (L1) — vendored by default; see BLUE_PRINT.md §12 for the toolchain-semver risk and fork policy
+- Python 3.8+ with `blake3` (`pip install blake3`) — only for the independent audit tool / `zig build verify`
+- [zig-algebra](https://github.com/samooth/zig-algebra) (L0) and [zig-zk](https://github.com/samooth/zig-zk) (L1) — not needed until F2 (F0/F1 are self-contained in `libs/`); see BLUE_PRINT.md §12
 - Linux x86_64 (primary)
 
 ## Documentation
