@@ -18,6 +18,7 @@ pub const trace = @import("libs/trace/root.zig");
 pub const statement = @import("libs/statement/root.zig");
 pub const attestation = @import("libs/attestation.zig");
 pub const api = @import("libs/api.zig");
+pub const fri = @import("libs/fri/root.zig");
 
 comptime {
     // Lazy-analysis trap: re-exported decls are not analyzed until referenced.
@@ -49,4 +50,7 @@ test {
     _ = @import("libs/statement/root.zig");
     _ = @import("libs/attestation.zig");
     _ = @import("libs/api.zig");
+    _ = @import("libs/fri/fp2.zig");
+    _ = @import("libs/fri/domain.zig");
+    _ = @import("libs/fri/root.zig");
 }

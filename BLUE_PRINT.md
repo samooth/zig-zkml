@@ -59,12 +59,12 @@ L0  Álgebra        (zig-algebra) Goldilocks, hash (Blake3/Poseidon), merkle,
                                  NTT
 ```
 
-Build vs vendorear:
+Build vs vendorear (ACTUALIZADO tras los spikes F2 — ver §12):
 
 | Pieza | Decisión |
 |---|---|
-| L0 zig-algebra | consumir tal cual (path dep o tarball+hash); fork propio si hace falta |
-| L1 zig-zk | consumir `air`, `transcript`, `stark`, `sumcheck`; **spike F2 obligatorio**: existencia/port de STARK FRI sobre Goldilocks (ver §12) |
+| L0/L1 proof stack | **NO reutilizar zig-zk**: su STARK es circle-M31 (+Binius) y el FRI "genérico" de zig-algebra resultó NO ser un test de grado-bajo (auditoría empírica: datos aleatorios verifican 16/16). Construir **FRI Goldilocks propio** en `libs/fri/` (diseño Plonky3/Stone: dominio 2-ádico en F_{p²}, pliegue x↔−x, chequeo final de grado) |
+| zig-merkle (de zig-algebra) | SÍ consumir: commitments de traza (initFromHashes/verifyPath, ~300 líneas auditables; no toca zig-transcript → sin el bug de módulos) |
 | L1 Groth16 wrapper | opcional F4, solo si on-chain; el verifier de referencia actual (scalar-mul bit a bit) es 100x demasiado lento |
 | L2/L3/L4 | construir aquí — no existe en Zig |
 
@@ -601,7 +601,7 @@ recalibran con el bench de F2. Los números duros de go/no-go están en §11.
 |---|---|---|---|
 | **F0** | `kt_weights_merkle_root` (moe+mla) sobre `loadWeights`; test root estable ante reorden de lectura; `verify_weights.py` | ~~zig-algebra `merkle` (o ~200 líneas propias)~~ **HECHO**: C ABI `zkml_attestor_*` (`libs/api.zig`, `include/zkml_c.h`) + streaming `Builder` + wire format + `tools/verify_weights.py` (auditor INDEPENDIENTE en Python, cross-verifica root y proofs de Zig) + gates `zig build abi`/`verify` — pendiente: glue `kt_*` en ktransformers-zig | overhead de carga < 5% (por medir en la integración) |
 | **F1** | `kt_transcript_seed`; sampling reproducible | **HECHO (lib)**: `zkml_transcript_seed` en el ABI; falta el glue kt | cero cambio en kernels |
-| **F2** | `libs/tensor` + gadget GEMM v1 (AIR chunk-16) + suite positiva/negativa vs `gemmExpertExact` | zig-zk `air`+`stark`+`transcript` | **Spikes previos**: (1) `zig fetch` semver 0.16.0-dev; (2) STARK/FRI Goldilocks existe o se porta; después: overhead < 100x en shape decode Qwen3-Next (criterio provisional, se fija post-spikes) |
+| **F2** | `libs/tensor` + gadget GEMM v1 (AIR chunk-16) + suite positiva/negativa vs `gemmExpertExact` | **tensor HECHO; FRI Goldilocks HECHO** (`libs/fri/`): F_{p²} = F_p[i] (p ≡ 3 mod 4), toro de norma 1 con orden p+1 = 2^61 (subgrupos 2-ádicos, layout natural — el antipodal x/−x está en (i, i+n/2)), pliegue canónico even/odd con 1/x = conj(x) en el toro, residual TRUNCADO a grado < 2^log_d sobre dominio final con rate < 1 (rate 1 = vacío — lección de los tests), commitments vía zig-merkle (verifyHashed — hojas pre-hashed), transcript absorbBytes/absorbField/challengeField (rejection sampling canónico). **Suite de mutación**: honesto degree-2 VERIFICA; datos aleatorios 16/16 RECHAZA; degree-128 RECHAZA (los mismos tests que el FRI de zig-algebra fallaba). Pendiente F2: AIR del gadget GEMM + composición con el FRI |
 | **F3** | `kt_prove_moe_layer`/`kt_verify_moe_layer` para 1 experto (Qwen3-Next shape real); binding Poseidon2 traza↔leaf; bench por bloque | F2 | proof < 1 MB, verify < 100 ms, test negativo ±1 ulp RECHAZA |
 | **F4** | fingerprint sumcheck v2 (GKR/zkLLM-style) + multi-bloque con recursion Poseidon2; Groth16 wrap solo si on-chain | zig-zk `sumcheck`, `snark` (si madura) | overhead GEMM < 50x; decisión de producto |
 
@@ -612,14 +612,15 @@ Se adopta upstream cuando zig-zk/zig-algebra publique tags.
 
 | Riesgo | Severidad | Mitigación |
 |---|---|---|
-| Package manager rechaza deps (`minimum_zig_version = "0.16.0"` vs toolchain `0.16.0-dev.2535`; semver dev < release) | ~~bloquea F2~~ **resuelto para F0/F1** | vendor de `libs/{field,merkle,transcript,tensor,trace,statement,attestation}` funcionando (32/32 tests); reevaluar el fetch real para zig-zk en F2 |
-| **STARK/FRI sobre Goldilocks no confirmado en zig-zk** (su STARK es M31; Binius es torres) | alto | spike F2 #2: port del STARK M31→Goldilocks (zig-algebra ya tiene NTT Goldilocks; el FRI es consumidor) — presupuesto 1–2 semanas si no existe |
-| Upstream zig-zk/zig-algebra: autor único, 0 stars, 5 días, sin tags | alto | fork propio desde F2; F0/F1 solo dependen de zig-algebra `merkle`/`hash` (bajo riesgo, o 200 líneas propias — HECHO: libs propias, sin dependencias externas) |
+| ~~Package manager rechaza deps (`minimum_zig_version = "0.16.0"` vs toolchain `0.16.0-dev.2535`)~~ | ~~bloquea F2~~ **RESUELTO (spike #1)** | `zig fetch --save git+https://github.com/samooth/{zig-algebra,zig-zk}` funciona sin fricción semver (commit c7cc303 / 78f265c pinneados en build.zig.zon) |
+| ~~STARK/FRI sobre Goldilocks no confirmado en zig-zk~~ | ~~alto~~ **RESUELTO (spike #2) — con hallazgo crítico** | zig-zk STARK = M31 circle-STARK (Stwo-style) + Binius: NO sirve para Goldilocks. zig-algebra expone un FRI "field-generic" PERO la auditoría empírica (`tools/fri_audit.zig`, gate `zig build spike`) demuestra que **acepta datos aleatorios 16/16** — index-pairing sin dominio RS ni chequeo final de grado: NO es un test de grado-bajo, no ancla soundness. **Decisión: FRI Goldilocks PROPIO en `libs/fri/`** (dominio subgrupo 2-ádico de F_{p²}: p+1 = 2^61 → 2-adicidad 62; p ≡ 3 mod 4 → F_{p²} = F_p[i]; pliegue canónico f_even(x²) + alpha·f_odd(x²), grado a la mitad, chequeo final de grado). Merkle de zig-algebra (`zig-merkle`, sin conflicto de módulos) se reutiliza para commitments |
+| Upstream zig-zk/zig-algebra: autor único, 0 stars, sin tags | alto (confirmado por los spikes) | dependencia SOLO de `zig-merkle` (hash + paths, ~300 líneas auditables, sin el bug de módulos zig-transcript/zig-transcript0 que rompe cualquier consumidor que importe fri+transcript); TODO lo criptográfico crítico vive en este repo |
 | Divergencia aritmética exacta vs fast path mayor que epsilon | medio | contrato §3 + cross-check continuo por capa en CI; si diverge, el esquema no captura al kernel y se corrige el esquema (o el kernel) antes de avanzar |
 | Coste binding Poseidon2 de pesos (2–4x en layer proof) | medio | amortización por sesión (hash column una vez por (layer, expert)); bench en F3 decide |
 | Composición cross-protocol (GEMM sumcheck + AIR + lookups) | medio en F4 | v1 monolítica evita el problema hasta que el stack funciona; v2 cambia solo el gadget GEMM |
 | Groth16 wrapper zig-zk lento (scalar-mul bit a bit, sin MSM) | bajo (solo F4 on-chain) | fuera de scope si no hay caso on-chain |
 | Tests de libs no ejecutados por multi-módulo (§13.1.1) | medio (pasado) | módulo único en `zkml.zig`; gate `--summary all` con conteo explícito en CI |
+| FRI propio: bug de soundness | alto | portar el diseño de Plonky3/Stone (batalla-probado) + suite de mutación obligatoria (§13): grado-2 acepta, aleatorio/degree-128 RECHAZA (el test 2/3 de `tools/fri_audit.z` aplica igual al propio), blowup 2^4, DEEP-fri opcional post-v1 |
 
 ## 13. Test y verificación
 
@@ -686,6 +687,26 @@ código demuestre lo contrario:
    verifica los artifacts que genera el ABI run — un bug de
    implementación no puede esconderse detrás de un bug del auditor.
    `zig build verify` corre: tests → ABI end-to-end → cross-audit.
+10. **FRI: el residual necesita rate < 1** (lección de la
+    implementación propia): si el dominio final tiene el MISMO tamaño
+    que el grado residual (rate 1), la interpolación de la última capa
+    siempre produce grado < m — el protocolo certifica NADA (datos
+    aleatorios con prover honesto verifican). Con dominio final =
+    blowup·d, el truncamiento descarta energía real del cheater y las
+    queries lo atrapan por distancia de código. El test de rechazo
+    (random 16/16) es OBLIGATORIO y forma parte de la definición de
+    done del FRI.
+11. **FRI: layout natural > bit-reversed** (lección): el layout
+    bit-reversed daba adyacencia x/−x (fold cache-friendly) PERO cada
+    fold rompía la estructura (los exponentes se escalan ×2 y la
+    adyacencia desaparece en las capas hijas). El layout natural
+    (antipodal en i, i+n/2) se PRESERVA bajo el fold en todos los
+    niveles: la aritmética de índices del prover y verifier queda
+    trivial y sin mapas de exponentes.
+12. **Ownership transfer en ArrayList de capas**: al mover buffers a
+    un ArrayList con defer de liberación, el buffer YA AÑADIDO no se
+    libera explícitamente (doble free → segfault downstream); un flag
+    `cur_owned` gobierna el único free del buffer residual final.
 
 ---
 

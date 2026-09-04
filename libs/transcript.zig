@@ -7,6 +7,9 @@
 
 const std = @import("std");
 
+/// Field interface required by absorbField/challengeField: NUM_BYTES,
+/// toBytes(), fromBytes([]const u8) error{...}!Self, and a modulus bound
+/// (rejection sampling needs fromBytes to fail on non-canonical bytes).
 pub const Transcript = struct {
     state: std.crypto.hash.Blake3,
 
@@ -27,6 +30,13 @@ pub const Transcript = struct {
         std.mem.writeInt(u64, &len_buf, data.len, .little);
         self.state.update(&len_buf);
         self.state.update(data);
+    }
+
+    /// Absorb raw bytes WITHOUT length prefix (Merkle roots, fixed-size
+    /// digests): domain-tagged so it cannot be confused with absorb().
+    pub fn absorbBytes(self: *Transcript, bytes: []const u8) void {
+        self.state.update("raw");
+        self.state.update(bytes);
     }
 
     /// Squeeze a 64-byte challenge (two independent 32-byte chunks).
@@ -56,6 +66,22 @@ pub const Transcript = struct {
     }
 
     /// Finalize and return the 32-byte running state hash.
+    /// Absorb a field element (needs NUM_BYTES + toBytes + a small
+    /// prefix domain-separating field absorptions from raw bytes).
+    pub fn absorbField(self: *Transcript, comptime F: type, e: F) void {
+        self.state.update("fld");
+        self.state.update(&e.toBytes());
+    }
+
+    /// Squeeze a field element via rejection sampling: F.fromBytes must
+    /// reject non-canonical encodings (>= modulus), which resqueezes.
+    pub fn challengeField(self: *Transcript, comptime F: type) F {
+        while (true) {
+            const c = self.challenge32();
+            if (F.fromBytes(c[0..F.NUM_BYTES])) |v| return v else |_| {}
+        }
+    }
+
     pub fn finish(self: *Transcript) [32]u8 {
         var out: [32]u8 = undefined;
         self.state.final(&out);
