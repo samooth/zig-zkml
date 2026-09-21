@@ -22,6 +22,12 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    // Expose the library module to downstream packages (bsvz-aria, etc.)
+    b.addModule("zig_zkml", lib_mod);
+
+    // Re-export zig-merkle so consumers don't need zig_algebra in their own deps
+    lib_mod.addImport("zig-merkle", zmerkle_mod);
+
     const lib = b.addLibrary(.{
         .name = "zkml",
         .root_module = lib_mod,
