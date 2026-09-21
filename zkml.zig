@@ -19,6 +19,8 @@ pub const statement = @import("libs/statement/root.zig");
 pub const attestation = @import("libs/attestation.zig");
 pub const api = @import("libs/api.zig");
 pub const fri = @import("libs/fri/root.zig");
+pub const air = @import("libs/air/root.zig");
+pub const gadgets = @import("libs/gadgets/root.zig");
 
 comptime {
     // Lazy-analysis trap: re-exported decls are not analyzed until referenced.
@@ -37,6 +39,10 @@ comptime {
     _ = &statement.StatementLayer.serialize;
     _ = &attestation.WeightsAttestor.init;
     _ = &api.zkml_attestor_create;
+    _ = &gadgets.gemm.GemmGadget.airFragment;
+    _ = &gadgets.nonlin.SiLULookup.airFragment;
+    _ = &gadgets.norm.RmsNormGadget.airFragment;
+    _ = &gadgets.routing.GroupTop2Gadget.airFragment;
 }
 
 test {
@@ -53,4 +59,10 @@ test {
     _ = @import("libs/fri/fp2.zig");
     _ = @import("libs/fri/domain.zig");
     _ = @import("libs/fri/root.zig");
+    _ = @import("libs/air/root.zig");
+    _ = @import("libs/gadgets/gemm/root.zig");
+    _ = @import("libs/gadgets/quant/root.zig");
+    _ = @import("libs/gadgets/nonlin/root.zig");
+    _ = @import("libs/gadgets/norm/root.zig");
+    _ = @import("libs/gadgets/routing/root.zig");
 }

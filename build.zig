@@ -13,7 +13,7 @@ pub fn build(b: *std.Build) void {
     });
     const zmerkle_mod = algebra_dep.module("zig-merkle");
 
-    const lib_mod = b.createModule(.{
+    const lib_mod = b.addModule("zig_zkml", .{
         .root_source_file = b.path("zkml.zig"),
         .target = target,
         .optimize = optimize,
@@ -21,9 +21,6 @@ pub fn build(b: *std.Build) void {
             .{ .name = "zig-merkle", .module = zmerkle_mod },
         },
     });
-
-    // Expose the library module to downstream packages (bsvz-aria, etc.)
-    b.addModule("zig_zkml", lib_mod);
 
     // Re-export zig-merkle so consumers don't need zig_algebra in their own deps
     lib_mod.addImport("zig-merkle", zmerkle_mod);
