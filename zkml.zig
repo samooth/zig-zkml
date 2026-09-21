@@ -21,6 +21,7 @@ pub const api = @import("libs/api.zig");
 pub const fri = @import("libs/fri/root.zig");
 pub const air = @import("libs/air/root.zig");
 pub const gadgets = @import("libs/gadgets/root.zig");
+pub const compile = @import("libs/compile/root.zig");
 
 comptime {
     // Lazy-analysis trap: re-exported decls are not analyzed until referenced.
@@ -43,6 +44,7 @@ comptime {
     _ = &gadgets.nonlin.SiLULookup.airFragment;
     _ = &gadgets.norm.RmsNormGadget.airFragment;
     _ = &gadgets.routing.GroupTop2Gadget.airFragment;
+    _ = &compile.CircuitGraph.init;
 }
 
 test {
@@ -65,4 +67,5 @@ test {
     _ = @import("libs/gadgets/nonlin/root.zig");
     _ = @import("libs/gadgets/norm/root.zig");
     _ = @import("libs/gadgets/routing/root.zig");
+    _ = @import("libs/compile/root.zig");
 }
