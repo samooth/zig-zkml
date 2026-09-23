@@ -86,6 +86,8 @@ test {
     _ = @import("libs/stark/float_ref.zig");
     _ = @import("libs/stark/fp16_ref.zig");
     _ = @import("libs/stark/air_builder.zig");
+    _ = @import("libs/stark/barrel.zig");
+    _ = @import("libs/stark/barrel_test.zig");
     _ = @import("libs/stark/widen_air.zig");
     _ = @import("libs/stark/widen_air_test.zig");
     _ = @import("libs/stark/float_air.zig");

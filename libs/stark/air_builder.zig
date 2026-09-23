@@ -248,8 +248,9 @@ pub const Trace = struct {
 
     /// Bit i of `v` goes to COLUMN (base + i), row r. The trace is
     /// column-major, so a run of bits is a stride over columns, not a
-    /// contiguous range.
-    pub fn writeBits(self: *Trace, base: u16, v: u32, n: u16, r: usize) void {
+    /// contiguous range. `v` is u64 because an fp32 significand plus its
+    /// product needs 49 bits.
+    pub fn writeBits(self: *Trace, base: u16, v: u64, n: u16, r: usize) void {
         for (0..n) |i| {
             self.columns[base + @as(u16, @intCast(i))][r] = Fp2.re(Goldilocks.fromU64((v >> @intCast(i)) & 1));
         }
