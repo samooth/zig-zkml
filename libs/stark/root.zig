@@ -149,14 +149,49 @@ pub const Proof = struct {
     /// Parallel to `fri_proof.queries`: the indices come from the
     /// transcript inside FRI, so reusing them adds no new randomness.
     openings: []Opening,
+    /// The first and last trace row, always opened when the system has
+    /// boundary constraints. Their indices are FIXED (not sampled): the
+    /// constraints only apply at those rows, and the values are
+    /// authenticated by the column commitment.
+    boundary_openings: []Opening,
 
     pub fn deinit(self: *Proof, allocator: std.mem.Allocator) void {
         for (self.openings) |*o| o.deinit(allocator);
         allocator.free(self.openings);
+        for (self.boundary_openings) |*o| o.deinit(allocator);
+        allocator.free(self.boundary_openings);
         self.fri_proof.deinit(allocator);
         self.* = undefined;
     }
 };
+
+/// Fill one opening (prev/current/next window + Merkle path) for LDE index i.
+fn buildOpening(
+    allocator: std.mem.Allocator,
+    columns: []const []const Fp2,
+    tree: *const commit_lib.MerkleTree,
+    i: usize,
+    stride: usize,
+) Error!Opening {
+    const lde_n = columns[0].len;
+    const prev_i = (i + lde_n - stride) % lde_n;
+    const next_i = (i + stride) % lde_n;
+    const ncols = columns.len;
+
+    const prev_vals = try allocator.alloc(Fp2, ncols);
+    errdefer allocator.free(prev_vals);
+    const cur_vals = try allocator.alloc(Fp2, ncols);
+    errdefer allocator.free(cur_vals);
+    const next_vals = try allocator.alloc(Fp2, ncols);
+    errdefer allocator.free(next_vals);
+    for (columns, 0..) |col, k| {
+        prev_vals[k] = col[prev_i];
+        cur_vals[k] = col[i];
+        next_vals[k] = col[next_i];
+    }
+    const path = tree.prove(i, allocator) catch return Error.OutOfMemory;
+    return .{ .index = i, .prev = prev_vals, .current = cur_vals, .next = next_vals, .path = path };
+}
 
 // ---------------------------------------------------------------------------
 // Prover
@@ -208,7 +243,9 @@ fn compose(
     defer allocator.free(next);
 
     var power = Fp2.one;
-    for (system.constraints, 0..) |c, ci| {
+    var ci: usize = 0;
+    for (system.constraints) |c| {
+        if (c.scope != .composed) continue;
         for (0..n) |i| {
             for (columns, 0..) |col, k| {
                 prev[k] = col[(i + n - stride) % n];
@@ -219,6 +256,7 @@ fn compose(
             acc[i] = acc[i].add(power.mul(v));
         }
         power = power.mul(alphas[ci]);
+        ci += 1;
     }
     return acc;
 }
@@ -283,7 +321,8 @@ pub fn prove(
     const commitment = try commit_lib.commit(allocator, columns, stride);
     transcript.absorbBytes(&commitment.root);
 
-    const alphas = try allocator.alloc(Fp2, system.constraints.len);
+    const n_composed = system.composedCount();
+    const alphas = try allocator.alloc(Fp2, n_composed);
     defer allocator.free(alphas);
     for (alphas) |*a| a.* = transcript.challengeField(Fp2);
 
@@ -321,38 +360,32 @@ pub fn prove(
     errdefer for (openings[0..made]) |*o| o.deinit(allocator);
 
     for (fri_proof.queries, 0..) |q, qi| {
-        const i = q.pair_index;
-        const prev_i = (i + lde_n - stride) % lde_n;
-        const next_i = (i + stride) % lde_n;
-        const ncols = columns.len;
-
-        const prev_vals = try allocator.alloc(Fp2, ncols);
-        errdefer allocator.free(prev_vals);
-        const cur_vals = try allocator.alloc(Fp2, ncols);
-        errdefer allocator.free(cur_vals);
-        const next_vals = try allocator.alloc(Fp2, ncols);
-        errdefer allocator.free(next_vals);
-        for (columns, 0..) |col, k| {
-            prev_vals[k] = col[prev_i];
-            cur_vals[k] = col[i];
-            next_vals[k] = col[next_i];
-        }
-        const path = tree.prove(i, allocator) catch return Error.OutOfMemory;
-
-        openings[qi] = .{
-            .index = i,
-            .prev = prev_vals,
-            .current = cur_vals,
-            .next = next_vals,
-            .path = path,
-        };
+        openings[qi] = try buildOpening(allocator, columns, &tree, q.pair_index, stride);
         made += 1;
+    }
+
+    // Boundary rows: trace row 0 sits at LDE index 0, trace row n-1 at
+    // (n-1)*stride.
+    const want_boundary = system.hasBoundary();
+    const n_boundary: usize = if (want_boundary) 2 else 0;
+    const boundary_openings = try allocator.alloc(Opening, n_boundary);
+    errdefer allocator.free(boundary_openings);
+    var bmade: usize = 0;
+    errdefer for (boundary_openings[0..bmade]) |*o| o.deinit(allocator);
+    if (want_boundary) {
+        boundary_openings[0] = try buildOpening(allocator, columns, &tree, 0, stride);
+        bmade += 1;
+        if (n > 1) {
+            boundary_openings[1] = try buildOpening(allocator, columns, &tree, (n - 1) * stride, stride);
+            bmade += 1;
+        }
     }
 
     return .{
         .commitment = commitment,
         .fri_proof = fri_proof,
         .openings = openings,
+        .boundary_openings = boundary_openings,
     };
 }
 
@@ -364,10 +397,13 @@ pub fn prove(
 fn recompose(opening: Opening, system: System, alphas: []const Fp2) Fp2 {
     var acc = Fp2.zero;
     var power = Fp2.one;
+    var ci: usize = 0;
     const w = Window{ .prev = opening.prev, .current = opening.current, .next = opening.next };
-    for (system.constraints, 0..) |c, ci| {
+    for (system.constraints) |c| {
+        if (c.scope != .composed) continue;
         acc = acc.add(power.mul(c.eval(w)));
         power = power.mul(alphas[ci]);
+        ci += 1;
     }
     return acc;
 }
@@ -392,9 +428,10 @@ pub fn verify(
     const n = @as(usize, 1) << config.log_trace;
 
     transcript.absorbBytes(&proof.commitment.root);
-    if (system.constraints.len > 64) return Error.InvalidProof;
+    const n_composed = system.composedCount();
+    if (n_composed > 64) return Error.InvalidProof;
     var alphas: [64]Fp2 = undefined;
-    for (0..system.constraints.len) |i| alphas[i] = transcript.challengeField(Fp2);
+    for (0..n_composed) |i| alphas[i] = transcript.challengeField(Fp2);
 
     const fri_ok = fri.verify(transcript, &proof.fri_proof, config.fri) catch return false;
     if (!fri_ok) return false;
@@ -419,9 +456,35 @@ pub fn verify(
         // i < lde_n/2.
         const half_lde = lde_n / 2;
         const q_value = q.values[0][if (i < half_lde) 0 else 1];
-        const p_value = recompose(opening, system, alphas[0..system.constraints.len]);
+        const p_value = recompose(opening, system, alphas[0..n_composed]);
         if (!p_value.eql(q_value.mul(z_h))) return false;
     }
+
+    // Boundary constraints, at the two fixed rows the prover must open.
+    if (system.hasBoundary()) {
+        const expected: usize = if (n > 1) 2 else 1;
+        if (proof.boundary_openings.len != expected) return Error.InvalidProof;
+        for (proof.boundary_openings, 0..) |opening, qi| {
+            if (opening.prev.len != ncols or opening.current.len != ncols or
+                opening.next.len != ncols) return Error.InvalidProof;
+            const leaf = commit_lib.hashWindow(ncols, opening.prev, opening.current, opening.next);
+            commit_lib.verifyLeaf(proof.commitment, opening.index, leaf, opening.path) catch return false;
+            const w = Window{
+                .prev = opening.prev,
+                .current = opening.current,
+                .next = opening.next,
+            };
+            // Opening 0 is the first trace row, opening 1 the last.
+            const want: expr.Scope = if (qi == 0) .boundary_first else .boundary_last;
+            for (system.constraints) |c| {
+                if (c.scope != want) continue;
+                if (!c.eval(w).isZero()) return false;
+            }
+        }
+    } else if (proof.boundary_openings.len != 0) {
+        return Error.InvalidProof;
+    }
+
     return true;
 }
 

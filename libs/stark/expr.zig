@@ -41,8 +41,25 @@ pub const Term = struct {
     coefficient: Fp2 = Fp2.one,
 };
 
+/// Where a constraint is enforced.
+pub const Scope = enum {
+    /// Composed into P and checked at every queried LDE point.
+    composed,
+    /// Checked only at the FIRST trace row ("s[0] = 0"). Boundary
+    /// constraints are only meaningful there, and expressing them as a
+    /// polynomial would cost degree n-1; instead the prover always opens
+    /// that row and the verifier evaluates the constraint on the
+    /// authenticated value. The row is fixed, not transcript-derived, which
+    /// is sound precisely because the constraint applies there and nowhere
+    /// else.
+    boundary_first,
+    /// Same, at the LAST trace row ("s[last] = the GEMM output").
+    boundary_last,
+};
+
 pub const Constraint = struct {
     name: []const u8,
+    scope: Scope = .composed,
     terms: []const Term,
 
     /// Degree as a polynomial in the row variable: a product of `k` column
@@ -101,16 +118,36 @@ pub const Window = struct {
 pub const System = struct {
     constraints: []const Constraint,
 
+    /// Degree bound of the COMPOSED constraints only — boundary
+    /// constraints never enter P, so they do not widen the blowup.
     pub fn maxDegree(self: System) usize {
         var max: usize = 0;
         for (self.constraints) |c| {
+            if (c.scope != .composed) continue;
             const d = c.degree();
             if (d > max) max = d;
         }
         return max;
     }
 
-    /// Highest column index referenced, or null if the system is constant.
+    pub fn composedCount(self: System) usize {
+        var n: usize = 0;
+        for (self.constraints) |c| {
+            if (c.scope == .composed) n += 1;
+        }
+        return n;
+    }
+
+    pub fn hasBoundary(self: System) bool {
+        for (self.constraints) |c| {
+            if (c.scope != .composed) return true;
+        }
+        return false;
+    }
+
+    /// Highest column index referenced by any constraint, or null if the
+    /// system is constant. Boundary constraints count: the verifier still
+    /// needs those columns opened.
     pub fn maxColumn(self: System) ?u16 {
         var max: ?u16 = null;
         for (self.constraints) |c| {
