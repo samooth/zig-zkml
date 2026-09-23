@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zkml-vllm"
+version = "0.1.0"
+description = "zig-zkml weights attestation + witness recording for vLLM"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+# Only needed inside a running vLLM; the ctypes binding and its tests are
+# dependency-free on purpose.
+vllm = ["vllm>=0.26"]
+test = ["pytest>=7", "safetensors>=0.6", "blake3"]
+
+[project.entry-points."vllm.general_plugins"]
+# vLLM calls this once per process (engine + workers) and ignores the return
+# value; it must therefore be idempotent.
+zkml_vllm_register = "zkml_vllm.model_loader:register"
+
+[tool.setuptools]
+# The source directory is `adapters/vllm` but the import name is `zkml_vllm`,
+# so the adapter never shadows the real `vllm` package on sys.path.
+packages = ["zkml_vllm"]
+
+[tool.setuptools.package-dir]
+zkml_vllm = "."

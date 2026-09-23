@@ -49,8 +49,10 @@ adapters/
 │                  #        vLLM, ktransformers — PLAN_MULTI_ENGINE.md)
 ├── llama_cpp/     # [done] zero-fork GGUF attestation wrapper
 │                  #        (zig build llama-adapter)
-└── zig_ai/        # [done] same-language module import: TensorSource →
-                   #        root, MetricHooks → witness (81/81 tests)
+├── zig_ai/        # [done] same-language module import: TensorSource →
+│                  #        root, MetricHooks → witness (81/81 tests)
+└── vllm/          # [done] ctypes over libzkml.so, `zkml_attested` load
+                   #        format, witness recorder (15 hermetic tests)
 libs/
 ├── field.zig      # [done] Goldilocks p = 2^61−1 (vendored L0)
 ├── merkle.zig     # [done] Blake3 tree (cached root, orphan self-pairing,
@@ -89,7 +91,7 @@ re-derives the root from the manifest and verifies the proof bytes.
 
 | Phase | Deliverable | Go/no-go |
 |---|---|---|
-| **F0** | Weights attestation (Blake3 + Merkle at load time) — **lib + C ABI + independent auditor done** (`zig build verify` gate); **llama.cpp adapter done** (`zig build llama-adapter`) and **zig-ai adapter done** (module import, 11 adapter tests in the default gate); vLLM / ktransformers adapters pending per PLAN_MULTI_ENGINE Stages 3–4 | load overhead < 5% |
+| **F0** | Weights attestation (Blake3 + Merkle at load time) — **lib + C ABI + independent auditor done** (`zig build verify` gate); adapters for **llama.cpp** (`zig build llama-adapter`), **zig-ai** (module import) and **vLLM** (ctypes, `zkml_attested`) done; ktransformers reference glue pending per PLAN_MULTI_ENGINE Stage 4 | load overhead < 5% |
 | **F1** | Deterministic, auditable sampling — **`zkml_transcript_seed` done in the ABI**; adapters consume it via the engine contract | zero kernel changes |
 | **Witness ABI v2** | `zkml_witness_*` session/record/finalize (additive) — **done** (Stage 5 of the multi-engine plan; `ZKML_ABI_VERSION = 2`) | determinism test green |
 | **F2** | `tensor` lib + GEMM gadget (AIR) with positive+negative tests — **tensor + FRI done**; STARK backend (constraint composition) pending | two spikes first: dep toolchain (semver `0.16.0-dev`), STARK/FRI over Goldilocks |

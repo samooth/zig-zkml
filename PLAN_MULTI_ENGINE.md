@@ -185,23 +185,43 @@ default verde: 81/81).
 
 ---
 
-### Stage 3 — vLLM ctypes binding (Python, camino más simple)
+### Stage 3 — vLLM ctypes binding (Python, camino más simple) — ✅ DONE
 
 **Goal:** shared library + módulo Python fino — sin extensión compilada.
 
+**Implementado:** binding `ctypes` completo sobre `libzkml.so` con
+`argtypes`/`restype` explícitos, `ZkmlAttestedLoader` (load format
+`zkml_attested`, registrado por el entry point `vllm.general_plugins`),
+bridge de witness con `WitnessRecorder`/`LayerScope`, y 15 tests
+**herméticos** (sin pytest, sin torch, sin vLLM) que entran en el gate
+default vía `zig build verify`.
+
 | Archivo | Cambio |
 |---|---|
-| `build.zig` | Añadir target **shared** junto al estático: `b.addLibrary(.{ .linkage = .dynamic, .name = "zkml" })` → `zig-out/lib/libzkml.so`. `.a` sigue default |
-| `adapters/vllm/zkml.py` | Loader `ctypes.CDLL`; wrappers Python: `class Attestor` (context manager: `add(name, bytes)` → `finish()` → `.root` bytes), `verify(proof, expected_root)`, `transcript_seed(ctx)`. `argtypes`/`restype` type-safe |
-| `adapters/vllm/model_loader.py` | `ZkmlAttestedLoader(BaseModelLoader)` — subclass del registry de vLLM, itera shards safetensors vía `safe_open`, streamea cada tensor al `Attestor`, expone `model.weights_root`. Registrado vía `register_model_loader("zkml_attested")` |
-| `adapters/vllm/witness.py` | Witness bridge: wraps `forward_context` / custom-op hooks de vLLM → serializa I/O de ops → alimenta `TraceRecorder` vía llamada C en batch (nuevas `zkml_witness_*` en `libs/api.zig`, ABI **v2 aditivo**) |
-| `adapters/vllm/test_zkml.py` | pytest: attestation sobre tensoeros fake → root; byte corrupto → root cambia; round-trip `verify` |
-| `adapters/vllm/pyproject.toml` | Paquete `zkml-vllm`, snippet de entry-point para `vllm.general_plugins` |
+| `build.zig` | Paso `vllm-adapter` (python3 + test) y su inclusión en `verify`; el target shared ya existía (Stage 1) |
+| `adapters/vllm/zkml.py` | `ctypes.CDLL` + firmas tipadas; `Attestor` (context manager, `add`/`finish`/`root`/`proof`), `Witness`, `SlotKey` (8 B, offsets 0/4/6/7), `verify_proof`, `transcript_seed`, `attest_items`; descubrimiento de librería (`$ZKML_LIB` → `zig-out/lib/libzkml.so`) |
+| `adapters/vllm/model_loader.py` | `ZkmlAttestedLoader`: hace *tee* del iterador `(name, tensor)` que vLLM ya produce (`safetensors_weights_iterator`) hacia el attestor; publica `model.weights_root`. La clase se construye on-demand (`build_loader_cls()`) para que el módulo importe sin vLLM |
+| `adapters/vllm/witness.py` | `WitnessRecorder` (begin/end en un hilo, `record_op` concurrente) + `LayerScope` + helpers de custom-op |
+| `adapters/vllm/test_zkml.py` | 15 tests con runner propio (compatible con pytest si está): determinismo, orden, **byte corrupto**, duplicados, vacío, proof round-trip, witness + estado + concurrencia, layout de `SlotKey`, y **cross-check contra `tools/verify_weights.py`** |
+| `adapters/vllm/pyproject.toml` | Paquete `zkml-vllm` (nombre de import `zkml_vllm`, para no ensombrecer el paquete `vllm` real); entry point `zkml_vllm.model_loader:register` |
+| `adapters/vllm/README.md` | Instalación, qué se attestea (nombres del checkpoint, pre-`WeightsMapper`; bytes crudos) y análisis de los mecanismos de witness de vLLM |
 
-**ABI:** llamadas witness son **aditivas** (`ZKML_ABI_VERSION 1 → 2`); las 9
-funciones existentes intactas — llama/kt adapters siguen en v1.
+**Decisión de diseño (atestestación):** se hashean los **nombres del
+checkpoint** y los **bytes en disco** sin convertir, no los parámetros
+fusionados del engine (`q_proj` → shard `qkv_proj`): una raíz publicada
+describe el artefacto. El tee va *dentro* del generador, así que los tensores
+que vLLM filtra (p. ej. poda por expert-parallel) no entran en la raíz sin
+querer.
 
-**Gate:** `zig build test` (tests nuevos `zkml_witness_*`), `zig build abi` (nm assert), `pytest adapters/vllm/`.
+**Hallazgo (witness):** vLLM no tiene hook de I/O por op en esta revisión —
+los module hooks se saltan bajo `torch.compile`/CUDA graphs, los passes de
+Inductor sólo ven el `fx.Graph` de compilación, y `set_forward_context` sólo
+trae metadatos de batch. El adapter aporta el lado de grabación y documenta
+que el hook debe ser explícito (`direct_register_custom_op` /
+`CustomOp.register_oot`), en vez de fingir un hook que no existe.
+
+**Gate:** `zig build verify` incluye ahora los 15 tests del adapter; `zig
+build test` (81/81), `abi`, `fmt` y `llama-adapter` siguen verdes.
 
 **Commit:** `feat(adapters): shared lib + vLLM ctypes loader & witness bridge`
 

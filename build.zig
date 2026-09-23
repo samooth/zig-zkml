@@ -114,12 +114,28 @@ pub fn build(b: *std.Build) void {
     py_manifest.step.dependOn(&run_abi.step);
     const py_selftest = b.addSystemCommand(&.{ "python3", "tools/verify_weights.py", "selftest" });
 
+    // --- Stage 3: vLLM adapter (ctypes) ----------------------------------
+    // Zero-dependency Python test over the shared library: attestation
+    // algebra, order independence, flipped-byte negative, proof round-trip,
+    // witness session, and a cross-check against the independent auditor.
+    const vllm_test = b.addSystemCommand(&.{ "python3", "adapters/vllm/test_zkml.py" });
+    vllm_test.step.dependOn(b.getInstallStep());
+    const vllm_step = b.step(
+        "vllm-adapter",
+        "Run the vLLM ctypes adapter tests (Stage 3; needs python3, no vLLM)",
+    );
+    vllm_step.dependOn(&vllm_test.step);
+
     const verify_step = b.step("verify", "End-to-end: tests + ABI + independent Python audit");
     verify_step.dependOn(&run_tests.step);
     verify_step.dependOn(&run_abi.step);
     verify_step.dependOn(&py_proof.step);
     verify_step.dependOn(&py_manifest.step);
     verify_step.dependOn(&py_selftest.step);
+    // vLLM ctypes adapter rides the default gate: it is hermetic, needs no
+    // vLLM/torch install, and it is the only test that exercises libzkml.so
+    // through a foreign function boundary.
+    verify_step.dependOn(&vllm_test.step);
 
     // --- F2 spikes -------------------------------------------------------
     // zig-algebra exposes its libs as named modules (zig-fri, ...). The FRI
