@@ -342,8 +342,10 @@ kt último como referencia).
 
 ## Fuera de scope de este plan
 
-- El backend STARK F2 (composición de constraints, etc.) — sigue en `TODO.md`.
-  Este plan solo **conecta motores al core ya genérico**.
+- El backend STARK F2 (composición de constraints, operand binding,
+  chunking 16 MACs, AIR de routing, núcleo LogUp y el AIR float bit-exacto)
+  — vive en `TODO.md`, donde además está el ROADMAP reorderado. Este plan
+  solo **conecta motores al core ya genérico**.
 - Editar repos upstream (llama.cpp, vllm, zig-ai, ktransformers-zig) — todos los
   cambios caen en zig-zkml.
 - Groth16 / recursión (F4) — intacto.

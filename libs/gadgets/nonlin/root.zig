@@ -3,6 +3,21 @@
 //! BLUE_PRINT §4.3: non-linearities are always LogUp lookups over precomputed
 //! tables. SiLU output (i16 q8.8) is proven with 2 byte lookups (high + low),
 //! never a single 2^16 table.
+//!
+//! **READ THIS BEFORE USING IT.** The mechanism below is correct — it is
+//! the cheapest way to state "y = f(x) for a fixed f" in this IR — but the
+//! table it attests is NOT a function any engine computes. No engine looks
+//! SiLU up on q8.8 inputs: llama.cpp and ggml call libm's `expf` or their
+//! own polynomial approximation, and the SIMD variants differ in the last
+//! bit. A proof built from this gadget would attest a function the engine
+//! does not run.
+//!
+//! What is actually required, per the architecture decision in TODO.md:
+//! the statement must PIN the implementation (engine + version + kernel
+//! variant) and prove THAT function — which, for a polynomial
+//! approximation, means bit-exact float arithmetic, not a table. See
+//! `libs/stark/fp16_air.zig` for what that costs (108 composed constraints
+//! per multiply) and BLUE_PRINT §4.3 for the correction.
 
 const std = @import("std");
 const tensor = @import("../../tensor/root.zig");

@@ -163,23 +163,52 @@ Notas:
   2^64 ≡ 8 (mod p) haría el valor erróneo en 8 unidades.)** El gadget
   dequant descompone signo/exp/mantisa (range proofs) + lookup pow2
   (17 entradas) + mul entero — todo LogUp, sin constraints de alto grado.
-- **Simplificación Q4_K v1 (documentada)**: `dequantQ4K` implementa la
-  variante simétrica (nibble − 8)·d de un solo scale por bloque. El
-  formato GGML real (super-block con d, m fp16 + 8 sub-scales de 6 bits,
-  dequant asimétrico (nibble − 8)·d·s_k + d·m) aterriza con el gadget F2;
-  el esquema `int4_gguf_q4_k` del enum NO cambia mientras tanto.
+- **Simplificación Q4_K v1 (documentada, AÚN NO LEVANTADA)**: `dequantQ4K`
+  implementa la variante simétrica (nibble − 8)·d de un solo scale por
+  bloque, que es exactamente lo que ata `quant_binding.zig`. El formato
+  GGML real (super-block con d, m fp16 + 8 sub-escalas de 6 bits, dequant
+  asimétrico) **sigue sin implementarse**: el trabajo de F2 validó la
+  pila con la variante simétrica, que es el camino real de llama.cpp
+  (Q4_0) pero no Q4_K. El plan es una **capa por formato**, ordenada
+  Q4_0/Q8_0 → Q4_1 → Q4_K → MXFP4/8 (ROADMAP S4 en `TODO.md`); el
+  esquema `int4_gguf_q4_k` del enum NO cambia mientras tanto.
+- **Float formats need no dequant constraints at all**: bf16→fp32 and
+  fp8→fp32 are exact widenings, so for those tensors the entire cost is
+  the float AIR, not the weights.
 - MXFP8 (que faltaba en el enum de zkML.md): scale UE8M0 por grupo de 32 es
   potencia de 2 → lookup pow2 directo, el esquema más barato de reencuadre.
 - **Estabilidad del enum `Scheme`**: los ordinales se serializan en el
   statement (`@intFromEnum`). Nunca reordenar/renumerar; solo añadir al
   final y bump de `statement_version`.
 
-### 4.3 No-linealidades: siempre lookups
+### 4.3 No-linealidades: siempre lookups — REVISADO, la premisa era falsa
 
 GELU, SiLU/SwiGLU, softmax-step: tablas precomputadas verificadas con
 LogUp (Haböck), rango probado con lookups encadenados. Rango i16 de salida
 de SiLU = 2 lookups de 2^8 (byte alto + byte bajo), no una tabla de 2^16.
 Nunca constraints polinomiales de alto grado.
+
+> **Corrección (spike S1, 2026-09).** El razonamiento de arriba es
+> correcto *dentro* de la aritmética de campo, y es lo que hace
+> `libs/gadgets/nonlin` (tabla q8.8 de 256 entradas). Pero **ningún motor
+> calcula SiLU con una lookup table**: llama a `expf` de libm o a la
+> aproximación polinomial de ggml, y las variantes SIMD de ggml difieren
+> en el último bit. Una prueba así atestigua una función que el engine no
+> ejecuta.
+>
+> Lo que sí es cierto, y es lo que S1 midió: la aritmética float
+> **bit-exacta** es expresable en este IR. Un multiply fp16 con RNE,
+> sticky bit y todo cuesta **108 restricciones compuestas de grado 2**
+> (`libs/stark/fp16_air.zig`), porque el producto de dos mantisas es un
+> entero exacto de 21 bits y el redondeo lo deciden dos booleanos. La
+> universalidad es alcanzable, pero por *emulación* de la semántica del
+> engine, no por tabla.
+>
+> Consecuencia de diseño: **el statement debe fijar la implementación**
+> (engine + versión + variante de kernel). La universalidad entre modelos
+> se consigue; entre implementaciones de engine no, y no es una limitación
+> del prover sino un hecho sobre lo que es un motor. Ver la decisión de
+> arquitectura al principio de `TODO.md`.
 
 ## 5. Composición de proofs y commitments
 
@@ -627,13 +656,19 @@ recalibran con el bench de F2. Los números duros de go/no-go están en §11.
 
 ## 11. Roadmap F0–F4
 
+> **El orden vigente no es el de esta tabla.** La tabla se conserva como
+> registro de las fases; el orden autoritativo, reorderado por lo que
+> midieron los spikes, está en el ROADMAP del `TODO.md`. En concreto el
+> sumcheck (F4 aquí) pasa a camino crítico, y la capa de pesos por formato
+> y la fuente del witness pasan a ser requisitos de F2/F3.
+
 | Fase | Entregable | Deps | Go/no-go |
 |---|---|---|---|
 | **F0** | Weight attestation por motor (`zkml_attestor_*` sobre el loader de cada engine); test root estable ante reorden; `verify_weights.py` | ~~zig-algebra `merkle`~~ **HECHO**: C ABI + streaming `Builder` + wire format + `tools/verify_weights.py` (auditor INDEPENDIENTE) + gates `zig build abi`/`verify` — pendiente: adapters multi-motor (`adapters/llama_cpp`, `zig_ai`, `vllm`, `ktransformers` — ver `PLAN_MULTI_ENGINE.md` Stages 0–4) | overhead de carga < 5% (por medir en la integración) |
 | **F1** | `zkml_transcript_seed`; sampling reproducible | **HECHO (lib)**: `zkml_transcript_seed` en el ABI; adapters consumen vía contract | cero cambio en kernels |
-| **F2** | `libs/tensor` + gadget GEMM v1 (AIR chunk-16) + suite positiva/negativa vs witness exacto del motor | **tensor HECHO; FRI Goldilocks HECHO** (`libs/fri/`): F_{p²} = F_p[i] (p ≡ 3 mod 4), toro de norma 1 con orden p+1 = 2^61 (subgrupos 2-ádicos, layout natural — el antipodal x/−x está en (i, i+n/2)), pliegue canónico even/odd con 1/x = conj(x) en el toro, residual TRUNCADO a grado < 2^log_d sobre dominio final con rate < 1 (rate 1 = vacío — lección de los tests), commitments vía zig-merkle (verifyHashed — hojas pre-hashed), transcript absorbBytes/absorbField/challengeField (rejection sampling canónico). **Suite de mutación**: honesto degree-2 VERIFICA; datos aleatorios 16/16 RECHAZA; degree-128 RECHAZA. Pendiente F2: AIR del gadget GEMM + composición con el FRI (backend STARK — ver `TODO.md`) |
+| **F2** | `libs/tensor` + gadget GEMM v1 (AIR chunk-16) + suite positiva/negativa vs witness exacto del motor | **tensor HECHO; FRI Goldilocks HECHO** (`libs/fri/`): F_{p²} = F_p[i] (p ≡ 3 mod 4), toro de norma 1 con orden p+1 = 2^61 (subgrupos 2-ádicos, layout natural — el antipodal x/−x está en (i, i+n/2)), pliegue canónico even/odd con 1/x = conj(x) en el toro, residual TRUNCADO a grado < 2^log_d sobre dominio final con rate < 1 (rate 1 = vacío — lección de los tests), commitments vía zig-merkle (verifyHashed — hojas pre-hashed), transcript absorbBytes/absorbField/challengeField (rejection sampling canónico). **Suite de mutación**: honesto degree-2 VERIFICA; datos aleatorios 16/16 RECHAZA; degree-128 RECHAZA. **Backend STARK HECHO** (`libs/stark/`: FFT sobre el toro de norma 1, IR de constraints, commitment, RLC, cociente, FRI, verificación en query) + binding de operandos + chunking 16 MACs + AIR de routing + núcleo LogUp + multiply fp16 bit-exacto (108 constraints, medido). El ORDEN del plan cambió por lo medido: ver la decisión de arquitectura y el ROADMAP al principio de `TODO.md` |
 | **F3** | `zkml_prove_layer`/`zkml_verify_layer` para 1 capa (shapes reales); binding Poseidon2 traza↔leaf; bench por bloque | F2 | proof < 1 MB, verify < 100 ms, test negativo ±1 ulp RECHAZA |
-| **F4** | fingerprint sumcheck v2 (GKR/zkLLM-style) + multi-bloque con recursion Poseidon2; Groth16 wrap solo si on-chain | zig-zk `sumcheck`, `snark` (si madura) | overhead GEMM < 50x; decisión de producto |
+| **F4** | recursion multi-bloque sobre el statement fingerprint; Groth16 wrap solo si on-chain | el **sumcheck v2 sube a CAMINO CRÍTICO** (ROADMAP S3): sin él, probar por elemento de salida cuesta ~9 días por tile 2048×1408 y ni siquiera el AIR float (108 constraints por operación) es asequible | overhead GEMM < 50x; decisión de producto |
 
 Vendorear por defecto (path dep + tarball hash); fork propio en
 Se adopta upstream cuando zig-zk/zig-algebra publique tags.

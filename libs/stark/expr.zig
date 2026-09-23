@@ -14,9 +14,18 @@
 //!   running sum   s' = s + a*b        -> [s@+1] - [s@0] - [a][b]
 //!   linear bind   out = W·x + b      -> [out] - [W][x] - b
 //!   range/boolean x*(x-1) = 0         -> [x][x] - [x]
-//! Division, inverses and lookups are NOT in this IR (they need the LogUp
-//! argument, BLUE_PRINT §7.4) — a constraint that needs them is not
-//! expressible yet, by design, rather than silently mis-proven.
+//!
+//! Inverses are expressible WITHOUT a division operator, and both existing
+//! users rely on that: an inverse is a witness column plus the degree-2
+//! identity `x·x⁻¹ = 1` (or `S·S⁻¹ = or` for "is the sum non-zero"), which
+//! also proves non-zero-ness for free. See fp16_air.zig.
+//!
+//! Lookups have a core (logup.zig: reciprocal columns plus a cyclic
+//! accumulator, which the cyclic domain gives for free) and float
+//! arithmetic has an AIR (fp16_air.zig). What is still NOT expressible is
+//! DIVISION, and comparisons — the IR has equalities only, so an
+//! inequality needs the inverse trick or a range check. Every one of those
+//! is a deliberate gap rather than a silent mis-proof.
 
 const std = @import("std");
 const fp2 = @import("../fri/fp2.zig");

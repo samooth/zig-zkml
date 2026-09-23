@@ -36,9 +36,13 @@
 //! applies unchanged; the price is the two extra transforms in step 5 that
 //! a coset LDE would avoid.
 //!
-//! Not here yet: LogUp/lookup arguments (§7.4), division and inverses in
-//! the AIR (the constraint IR cannot express them), and multi-layer
-//! composition (F3).
+//! Now also here: the LogUp core (logup.zig) and a bit-exact fp16 multiply
+//! AIR (fp16_air.zig, 108 composed constraints), both built on the
+//! composition machinery in this file.
+//!
+//! Not here yet: DIVISION in the IR, pinning a fixed table to a public
+//! input (so a lookup proves w is a permutation of u but not that u is
+//! *the* table), and multi-layer composition (F3).
 
 const std = @import("std");
 const fp2 = @import("../fri/fp2.zig");

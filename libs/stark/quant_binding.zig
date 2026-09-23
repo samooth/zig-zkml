@@ -17,11 +17,19 @@
 //!
 //! The scale is a witness column constrained only by the equation above.
 //! That binds the *representation* — each operand is a raw 4-bit nibble
-//! times one scale — but NOT the scale's provenance: proving it came from a
-//! real fp16 / GGML sub-scale table needs the lookup half of LogUp, which
-//! the IR cannot express yet (BLUE_PRINT §7.4, TODO under F2). A negative
-//! test pins this boundary: an operand with a *valid* nibble but a scale it
-//! could not have had is currently provable, and that is the known gap.
+//! times one scale — but NOT the scale's provenance. LogUp itself now
+//! exists (logup.zig) and could express the lookup; what is missing is
+//! PINNING the table: a lookup argument proves w is a permutation of u, and
+//! `u` is still witness, so a prover can set u = w. Pinning needs the table
+//! in a preprocessed trace whose commitment root is a public input — the
+//! multi-trace plumbing of F3. Until then an operand with a *valid* nibble
+//! but a scale no fp16 could produce is still provable, and
+//! `quant_test.zig` pins that boundary as the known gap.
+//!
+//! There is a cheaper route for fp16 specifically, and it is the planned
+//! one: `fp16ToFixedQ4_22` is `(1024 + m)·2^(e+12)`, a variable shift, i.e.
+//! a barrel shifter, i.e. `out = sel·a + (1-sel)·b` — degree 2 and already
+//! expressible. That closes the gap without any public input at all.
 //!
 //! Column layout (on top of gemm_air's four):
 //!
