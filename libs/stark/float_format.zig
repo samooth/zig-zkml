@@ -1,6 +1,6 @@
 //! Binary floating-point format parameters (F2, S2).
 //!
-//! The fp16 AIR in fp16_air.zig was written for one format with the
+//! The float AIR in float_air.zig was written for one format with the
 //! widths spelled out. "Works for any quantized or unquantized model"
 //! needs bf16 and fp8 too, and the STRUCTURE is identical across them —
 //! only the field widths and the exponent bias change. This module is
@@ -91,7 +91,7 @@ pub const Format = struct {
 
     /// How many bits of the product survive rounding: `sigBits` when the
     /// product needs the full width, one less when it does not. The AIR
-    /// picks between them with a single witness bit (see fp16_air.zig).
+    /// picks between them with a single witness bit (see float_air.zig).
     pub fn keptHigh(self: Format) u8 {
         return self.sigBits();
     }

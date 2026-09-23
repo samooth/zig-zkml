@@ -199,7 +199,7 @@ Nunca constraints polinomiales de alto grado.
 > Lo que sí es cierto, y es lo que S1 midió: la aritmética float
 > **bit-exacta** es expresable en este IR. Un multiply fp16 con RNE,
 > sticky bit y todo cuesta **108 restricciones compuestas de grado 2**
-> (`libs/stark/fp16_air.zig`), porque el producto de dos mantisas es un
+> (`libs/stark/float_air.zig`), porque el producto de dos mantisas es un
 > entero exacto de 21 bits y el redondeo lo deciden dos booleanos. La
 > universalidad es alcanzable, pero por *emulación* de la semántica del
 > engine, no por tabla.

@@ -16,7 +16,7 @@
 //! the statement must PIN the implementation (engine + version + kernel
 //! variant) and prove THAT function — which, for a polynomial
 //! approximation, means bit-exact float arithmetic, not a table. See
-//! `libs/stark/fp16_air.zig` for what that costs (108 composed constraints
+//! `libs/stark/float_air.zig` for what that costs (108 composed constraints
 //! per multiply) and BLUE_PRINT §4.3 for the correction.
 
 const std = @import("std");

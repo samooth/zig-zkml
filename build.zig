@@ -42,6 +42,7 @@ pub fn build(b: *std.Build) void {
 
     // Unit tests for the library (all files, via the single module root).
     const tests = b.addTest(.{
+        .filters = &.{b.option([]const u8, "test-filter", "only run tests matching this text") orelse ""},
         .root_module = lib_mod,
     });
     const run_tests = b.addRunArtifact(tests);
@@ -224,7 +225,7 @@ pub fn build(b: *std.Build) void {
 
     const kt_artifacts = ".zig-cache/kt_adapter/artifacts";
     const kt_test = b.addSystemCommand(&.{
-        "sh", "-c",
+        "sh",                                                                                     "-c",
         "mkdir -p " ++ kt_artifacts ++ " && .zig-cache/kt_adapter/kt_glue_test " ++ kt_artifacts,
     });
     kt_test.step.dependOn(&kt_build.step);

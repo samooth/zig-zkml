@@ -37,7 +37,7 @@
 //! a coset LDE would avoid.
 //!
 //! Now also here: the LogUp core (logup.zig) and a bit-exact fp16 multiply
-//! AIR (fp16_air.zig, 108 composed constraints), both built on the
+//! AIR (float_air.zig, 108 composed constraints), both built on the
 //! composition machinery in this file.
 //!
 //! Not here yet: DIVISION in the IR, pinning a fixed table to a public
