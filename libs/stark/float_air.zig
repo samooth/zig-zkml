@@ -148,111 +148,22 @@ pub fn Layout(comptime f: Format) type {
     };
 }
 
-pub const kOne = Fp2.one;
-const kNegOne = Fp2.neg(Fp2.one);
+/// The shared builder, moved out of this file so the other AIRs do not
+/// reimplement the freeze-once discipline.
+const bld = @import("./air_builder.zig");
+const Builder = bld.Builder;
+const LinTerm = bld.LinTerm;
+pub const Trace = bld.Trace;
+const g = bld.g;
+const kNegModPow2 = bld.kNegModPow2;
+const kOne = bld.kOne;
+const kNegOne = bld.kNegOne;
 
 /// A constraint name built at comptime, so the numbers in it are the
 /// format's numbers and not binary16's.
 fn cname(comptime fmt: []const u8, comptime args: anytype) []const u8 {
     return std.fmt.comptimePrint(fmt, args);
 }
-
-fn g(v: u64) Fp2 {
-    return Fp2.re(Goldilocks.fromU64(v));
-}
-
-/// A run of factors, recorded as INDICES while building.
-///
-/// Recording slices here would be a use-after-free waiting to happen: the
-/// backing ArrayLists reallocate as they grow, so every Constraint written
-/// before a growth points into a buffer that no longer exists. The first
-/// version of this file did exactly that and segfaulted the verifier
-/// mid-walk. Indices survive reallocation; slices are resolved once, at the
-/// end, against the final buffers.
-const FRange = struct {
-    first: usize,
-    len: usize,
-};
-
-const TSpec = struct {
-    factors: FRange,
-    coefficient: Fp2,
-};
-
-const LinTerm = struct {
-    factors: FRange,
-    coefficient: Fp2 = kOne,
-};
-
-const CSpec = struct {
-    name: []const u8,
-    scope: Scope,
-    first_term: usize,
-    n_terms: usize,
-};
-
-const Builder = struct {
-    allocator: std.mem.Allocator,
-    factors: std.ArrayList(Factor) = .empty,
-    terms: std.ArrayList(TSpec) = .empty,
-    constraints: std.ArrayList(CSpec) = .empty,
-
-    fn one(self: *Builder, col: u16) !FRange {
-        try self.factors.append(self.allocator, .{ .column = .{ .index = col } });
-        return .{ .first = self.factors.items.len - 1, .len = 1 };
-    }
-
-    fn constant(self: *Builder, v: Fp2) !FRange {
-        try self.factors.append(self.allocator, .{ .constant = v });
-        return .{ .first = self.factors.items.len - 1, .len = 1 };
-    }
-
-    fn pair(self: *Builder, a: u16, b: u16) !FRange {
-        try self.factors.append(self.allocator, .{ .column = .{ .index = a } });
-        try self.factors.append(self.allocator, .{ .column = .{ .index = b } });
-        return .{ .first = self.factors.items.len - 2, .len = 2 };
-    }
-
-    /// A constraint whose terms are the `terms` just described, in order.
-    fn lin(self: *Builder, name: []const u8, scope: Scope, terms: []const LinTerm) !void {
-        if (terms.len == 0) return;
-        const first_term = self.terms.items.len;
-        for (terms) |lt| {
-            try self.terms.append(self.allocator, .{
-                .factors = lt.factors,
-                .coefficient = lt.coefficient,
-            });
-        }
-        try self.constraints.append(self.allocator, .{
-            .name = name,
-            .scope = scope,
-            .first_term = first_term,
-            .n_terms = terms.len,
-        });
-    }
-};
-
-pub const BuildError = error{ OutOfMemory, BadWidth };
-
-/// The full system, owning all storage its constraints point into.
-pub const Owned = struct {
-    allocator: std.mem.Allocator,
-    factors: []Factor,
-    terms: []Term,
-    constraints: []Constraint,
-    built: System,
-
-    pub fn system(self: *const Owned) System {
-        return self.built;
-    }
-
-    pub fn deinit(self: *Owned) void {
-        self.allocator.free(self.factors);
-        self.allocator.free(self.terms);
-        self.allocator.free(self.constraints);
-        self.* = undefined;
-    }
-};
 
 /// Number of constraints per multiply — the spike's headline number.
 pub const constraints_per_multiply: usize = 108;
@@ -273,7 +184,9 @@ pub fn expected_constraints(f: Format) usize {
 }
 
 /// Build the fp16 multiply AIR. `rows` multiplies, one per row.
-pub fn buildSystem(allocator: std.mem.Allocator, rows: usize, comptime f: Format) BuildError!Owned {
+pub const BuildError = bld.BuildError || error{BadWidth};
+
+pub fn buildSystem(allocator: std.mem.Allocator, rows: usize, comptime f: Format) BuildError!bld.Owned {
     const L = Layout(f);
     // comptime so the constraint NAMES can carry the constants they
     // actually constrain: a name saying "1024" on a bf16 system is a lie.
@@ -577,44 +490,7 @@ pub fn buildSystem(allocator: std.mem.Allocator, rows: usize, comptime f: Format
     // Freeze the three buffers, then RESOLVE the recorded indices into
     // slices. Only now do slices exist, and they point into buffers that
     // will not move again.
-    const factor_buf = try b.factors.toOwnedSlice(allocator);
-    errdefer allocator.free(factor_buf);
-    const term_specs = try b.terms.toOwnedSlice(allocator);
-    defer allocator.free(term_specs);
-    const c_specs = try b.constraints.toOwnedSlice(allocator);
-    defer allocator.free(c_specs);
-
-    const terms = try allocator.alloc(Term, term_specs.len);
-    errdefer allocator.free(terms);
-    for (term_specs, 0..) |spec, i| {
-        terms[i] = .{
-            .factors = factor_buf[spec.factors.first .. spec.factors.first + spec.factors.len],
-            .coefficient = spec.coefficient,
-        };
-    }
-
-    const per_row = c_specs.len;
-    const expected = expected_constraints(f);
-    if (per_row != expected) {
-        std.debug.print("float air: built {d} constraints per multiply, {s} should be {d}\n", .{ per_row, f.name, expected });
-    }
-    const all = try allocator.alloc(Constraint, per_row * rows);
-    for (0..rows) |r| {
-        for (c_specs, 0..) |spec, i| {
-            all[r * per_row + i] = .{
-                .name = spec.name,
-                .scope = spec.scope,
-                .terms = terms[spec.first_term .. spec.first_term + spec.n_terms],
-            };
-        }
-    }
-    return .{
-        .allocator = allocator,
-        .factors = factor_buf,
-        .terms = terms,
-        .constraints = all,
-        .built = .{ .constraints = all },
-    };
+    return bld.freeze(allocator, &b, rows);
 }
 
 /// `out` = OR of the `count` boolean bits at `base`, via the
@@ -640,26 +516,9 @@ fn stickyOr(b: *Builder, sum_col: u16, inv_col: u16, out_col: u16, base: u16, co
     });
 }
 
-/// -2^i as a field element, for the reconstruction coefficients.
-fn kNegModPow2(i: u16) u64 {
-    const p = Goldilocks.p;
-    return p - ((@as(u64, 1) << @intCast(i)) % p);
-}
-
 // ---------------------------------------------------------------------------
 // Trace construction
 // ---------------------------------------------------------------------------
-
-pub const Trace = struct {
-    rows: usize,
-    columns: [][]Fp2,
-
-    pub fn deinit(self: *Trace, allocator: std.mem.Allocator) void {
-        for (self.columns) |c| allocator.free(c);
-        allocator.free(self.columns);
-        self.* = undefined;
-    }
-};
 
 pub const BuildTraceError = error{
     OutOfMemory,
@@ -668,15 +527,6 @@ pub const BuildTraceError = error{
     /// proving something plausible but wrong.
     UnsupportedCase,
 };
-
-/// Bit i of `v` goes to COLUMN (base + i), row r — the trace is
-/// column-major, so a run of bits is a stride over columns, not a
-/// contiguous range.
-fn writeBits(cols: [][]Fp2, base: u16, v: u32, n: u8, r: usize) void {
-    for (0..n) |i| {
-        cols[base + @as(u16, @intCast(i))][r] = Fp2.re(Goldilocks.fromU64((v >> @intCast(i)) & 1));
-    }
-}
 
 /// How many of the low `n` bits are set. The AIR recomputes this as a
 /// column and proves it is non-zero exactly when the OR must be 1.
@@ -701,16 +551,9 @@ pub fn buildTrace(
     const rows = pairs.len;
     std.debug.assert(rows > 0);
 
-    const cols = try allocator.alloc([]Fp2, L.column_count);
-    errdefer allocator.free(cols);
-    var made: usize = 0;
-    errdefer for (cols[0..made]) |c| allocator.free(c);
-    for (0..L.column_count) |i| {
-        const buf = try allocator.alloc(Fp2, rows);
-        @memset(buf, Fp2.zero);
-        cols[i] = buf;
-        made += 1;
-    }
+    var trace = try Trace.alloc(allocator, L.column_count, rows);
+    errdefer trace.deinit(allocator);
+    const cols = trace.columns;
 
     for (pairs, 0..) |pair, r| {
         const a = pair[0];
@@ -726,9 +569,9 @@ pub fn buildTrace(
         const pc = f.parts(expected);
         if (pc.exponent == 0 or pc.exponent == f.emax()) return BuildTraceError.UnsupportedCase;
 
-        writeBits(cols, L.col_a_bits, a, @intCast(f.byteWidth()), r);
-        writeBits(cols, L.col_b_bits, b, @intCast(f.byteWidth()), r);
-        writeBits(cols, L.col_c_bits, expected, @intCast(f.byteWidth()), r);
+        trace.writeBits(L.col_a_bits, a, @intCast(f.byteWidth()), r);
+        trace.writeBits(L.col_b_bits, b, @intCast(f.byteWidth()), r);
+        trace.writeBits(L.col_c_bits, expected, @intCast(f.byteWidth()), r);
 
         const a_sig: u32 = @as(u32, f.mantImplicit()) + @as(u32, pa.mantissa);
         const b_sig: u32 = @as(u32, f.mantImplicit()) + @as(u32, pb.mantissa);
@@ -747,7 +590,7 @@ pub fn buildTrace(
 
         const product: u32 = a_sig * b_sig;
         cols[L.col_product][r] = Fp2.re(Goldilocks.fromU64(product));
-        writeBits(cols, L.col_p_bits, product, f.productBits(), r);
+        trace.writeBits(L.col_p_bits, product, f.productBits(), r);
 
         const norm: u32 = if (product >= (@as(u32, 1) << @intCast(f.normBit()))) 1 else 0;
         cols[L.col_norm][r] = Fp2.re(Goldilocks.fromU64(norm));
@@ -791,5 +634,5 @@ pub fn buildTrace(
         cols[L.col_inc][r] = Fp2.re(Goldilocks.fromU64(inc));
         cols[L.col_carry][r] = Fp2.re(Goldilocks.fromU64(carry));
     }
-    return .{ .rows = rows, .columns = cols };
+    return trace;
 }

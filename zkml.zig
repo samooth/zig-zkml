@@ -85,6 +85,9 @@ test {
     _ = @import("libs/stark/float_format.zig");
     _ = @import("libs/stark/float_ref.zig");
     _ = @import("libs/stark/fp16_ref.zig");
+    _ = @import("libs/stark/air_builder.zig");
+    _ = @import("libs/stark/widen_air.zig");
+    _ = @import("libs/stark/widen_air_test.zig");
     _ = @import("libs/stark/float_air.zig");
     _ = @import("libs/stark/float_air_test.zig");
     _ = @import("libs/stark/routing_air.zig");
