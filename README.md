@@ -51,8 +51,10 @@ adapters/
 │                  #        (zig build llama-adapter)
 ├── zig_ai/        # [done] same-language module import: TensorSource →
 │                  #        root, MetricHooks → witness (81/81 tests)
-└── vllm/          # [done] ctypes over libzkml.so, `zkml_attested` load
-                   #        format, witness recorder (15 hermetic tests)
+├── vllm/          # [done] ctypes over libzkml.so, `zkml_attested` load
+│                  #        format, witness recorder (15 hermetic tests)
+└── ktransformers/ # [done] reference C glue kt_zkml_* → zkml_*
+                   #        (zig build kt-adapter)
 libs/
 ├── field.zig      # [done] Goldilocks p = 2^61−1 (vendored L0)
 ├── merkle.zig     # [done] Blake3 tree (cached root, orphan self-pairing,
@@ -91,7 +93,7 @@ re-derives the root from the manifest and verifies the proof bytes.
 
 | Phase | Deliverable | Go/no-go |
 |---|---|---|
-| **F0** | Weights attestation (Blake3 + Merkle at load time) — **lib + C ABI + independent auditor done** (`zig build verify` gate); adapters for **llama.cpp** (`zig build llama-adapter`), **zig-ai** (module import) and **vLLM** (ctypes, `zkml_attested`) done; ktransformers reference glue pending per PLAN_MULTI_ENGINE Stage 4 | load overhead < 5% |
+| **F0** | Weights attestation (Blake3 + Merkle at load time) — **lib + C ABI + independent auditor done** (`zig build verify` gate); **all four engine adapters done**: llama.cpp (`zig build llama-adapter`), zig-ai (module import), vLLM (ctypes, `zkml_attested`), ktransformers-zig (`zig build kt-adapter`) — each with a negative test and an independent cross-check | load overhead < 5% (not yet measured) |
 | **F1** | Deterministic, auditable sampling — **`zkml_transcript_seed` done in the ABI**; adapters consume it via the engine contract | zero kernel changes |
 | **Witness ABI v2** | `zkml_witness_*` session/record/finalize (additive) — **done** (Stage 5 of the multi-engine plan; `ZKML_ABI_VERSION = 2`) | determinism test green |
 | **F2** | `tensor` lib + GEMM gadget (AIR) with positive+negative tests — **tensor + FRI done**; STARK backend (constraint composition) pending | two spikes first: dep toolchain (semver `0.16.0-dev`), STARK/FRI over Goldilocks |
@@ -106,7 +108,7 @@ Realistic cost expectations (measured against DeepSeek-V3/Qwen3-Next shapes): we
 - Python 3.8+ with `blake3` (`pip install blake3`) — only for the independent audit tool / `zig build verify`
 - [zig-algebra](https://github.com/samooth/zig-algebra) (L0) and [zig-zk](https://github.com/samooth/zig-zk) (L1) — not needed until F2 (F0/F1 are self-contained in `libs/`); see BLUE_PRINT.md §12
 - Linux x86_64 (primary)
-- Per-adapter extras: a **built** llama.cpp checkout + CMake (Stage 1, done), vLLM + ctypes (Stage 3) — see `adapters/`
+- Per-adapter extras: a **built** llama.cpp checkout + CMake (Stage 1), vLLM + ctypes (Stage 3), a **built** ktransformers-zig checkout (Stage 4) — see `adapters/`
 
 ## Documentation
 

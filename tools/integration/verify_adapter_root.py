@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
-verify_llama_adapter.py — cross-check the llama.cpp adapter's attestation
+verify_adapter_root.py — cross-check an engine adapter's attestation
 root against the independent auditor (tools/verify_weights.py).
 
 Thin integration wrapper: reads the artifacts emitted by
 `zkml_llama_test <workdir>` (root.hex + manifest.json) and delegates to
 verify_weights.py's manifest mode. Kept separate so the adapter gate has a
-single, documented entry point (PLAN_MULTI_ENGINE Stage 1).
+single, documented entry point (PLAN_MULTI_ENGINE Stage 1), reused by
+the ktransformers and vLLM adapters.
 
 Usage:
-  verify_llama_adapter.py <workdir>          # root.hex + manifest.json
-  verify_llama_adapter.py --root HEX --manifest path.json
+  verify_adapter_root.py <workdir>          # root.hex + manifest.json
+  verify_adapter_root.py --root HEX --manifest path.json
 
 Exit 0 = verified, 1 = mismatch, 2 = usage/missing artifacts.
 """

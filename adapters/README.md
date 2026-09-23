@@ -11,7 +11,10 @@ documented as READMEs next to the adapter code.
 | `llama_cpp/` | 1 ✅ | Zero-fork wrapper over the public `gguf.h` reader (streamed tensors → attestor) |
 | `zig_ai/` | 2 ✅ | Direct Zig module import; `TensorSource` over `GgufFile` → attestor; `MetricHooks` → witness |
 | `vllm/` | 3 ✅ | `ctypes` over `libzkml.so`; `zkml_attested` load format; witness recorder |
-| `ktransformers/` | 4 | Reference glue (`kt_*` → `zkml_*` mapping) |
+| `ktransformers/` | 4 ✅ | Reference C glue: `kt_zkml_*` → `zkml_*`, sized by `kt_type_row_bytes` |
+
+All four ship a negative test and are cross-checked against
+`tools/verify_weights.py`.
 
 Staging, per-file work items and gates: [`../PLAN_MULTI_ENGINE.md`](../PLAN_MULTI_ENGINE.md).
 

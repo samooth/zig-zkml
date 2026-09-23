@@ -164,6 +164,51 @@ pub fn build(b: *std.Build) void {
     const spike_step = b.step("spike", "F2 spikes: FRI soundness audit over Goldilocks");
     spike_step.dependOn(&run_fri_audit.step);
 
+    // --- Stage 4: ktransformers-zig reference glue (optional) ------------
+    // Same shape as the llama adapter: CMake configure/build, gated test,
+    // independent Python audit of the emitted root. Needs a built
+    // ktransformers-zig sibling checkout.
+    const kt_dir = b.option(
+        []const u8,
+        "kt-dir",
+        "Path to a built ktransformers-zig checkout (default: sibling ../ktransformers-zig)",
+    ) orelse b.fmt("{s}/../ktransformers-zig", .{b.build_root.path orelse "."});
+    const kt_variant = b.option(
+        []const u8,
+        "kt-variant",
+        "Which prebuilt ktransformers-zig kernel variant to link (avx2, amx, ...)",
+    ) orelse "avx2";
+
+    const kt_cfg = b.addSystemCommand(&.{
+        "cmake", "-S", "adapters/ktransformers", "-B", ".zig-cache/kt_adapter",
+    });
+    kt_cfg.addArg(b.fmt("-DKT_DIR={s}", .{kt_dir}));
+    kt_cfg.addArg(b.fmt("-DKT_VARIANT={s}", .{kt_variant}));
+    kt_cfg.step.dependOn(b.getInstallStep());
+
+    const kt_build = b.addSystemCommand(&.{
+        "cmake", "--build", ".zig-cache/kt_adapter", "--parallel",
+    });
+    kt_build.step.dependOn(&kt_cfg.step);
+
+    const kt_artifacts = ".zig-cache/kt_adapter/artifacts";
+    const kt_test = b.addSystemCommand(&.{
+        "sh", "-c",
+        "mkdir -p " ++ kt_artifacts ++ " && .zig-cache/kt_adapter/kt_glue_test " ++ kt_artifacts,
+    });
+    kt_test.step.dependOn(&kt_build.step);
+
+    const kt_py = b.addSystemCommand(&.{
+        "python3", "tools/integration/verify_adapter_root.py", kt_artifacts,
+    });
+    kt_py.step.dependOn(&kt_test.step);
+
+    const kt_step = b.step(
+        "kt-adapter",
+        "Build + test the ktransformers-zig reference glue (Stage 4; needs a built sibling checkout)",
+    );
+    kt_step.dependOn(&kt_py.step);
+
     // --- Stage 1: llama.cpp adapter (optional — needs CMake + built llama.cpp) ---
     // Build the zero-fork GGUF attestation wrapper and run its gated test
     // (positive + negative + Python cross-check). Not part of the default
@@ -203,7 +248,7 @@ pub fn build(b: *std.Build) void {
     llama_nm.step.dependOn(&llama_build.step);
 
     const llama_py = b.addSystemCommand(&.{
-        "python3", "tools/integration/verify_llama_adapter.py", llama_artifacts,
+        "python3", "tools/integration/verify_adapter_root.py", llama_artifacts,
     });
     llama_py.step.dependOn(&llama_test.step);
 

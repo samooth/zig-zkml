@@ -118,7 +118,7 @@ consumidores C puros) y el target **shared** `libzkml.so` en `build.zig`.
 | `adapters/llama_cpp/CMakeLists.txt` | Build standalone de `libzkml_llama.so` + `zkml_llama_test` (linkea `libggml-base.so` + `libzkml.so`) |
 | `adapters/llama_cpp/README.md` | Build, commit pineado de llama.cpp (`1c3c9674d`, v0.0.10269), notas de diseño |
 | `adapters/llama_cpp/test_attest.cpp` | Positivo + determinismo + **negativo** (1 byte corrupto → root distinto); emite `root.hex` + `manifest.json` |
-| `tools/integration/verify_llama_adapter.py` | Wrapper fino que delega en `tools/verify_weights.py` (auditor independiente) |
+| `tools/integration/verify_adapter_root.py` | Wrapper fino que delega en `tools/verify_weights.py` (auditor independiente) |
 | `libs/api.zig` + `include/zkml_c.h` | `zkml_allocator_process()` — allocator de proceso para consumidores C (aditivo) |
 | `build.zig` | Target shared `libzkml.so`; paso `llama-adapter` (no bloquea el build default) |
 
@@ -137,7 +137,7 @@ comparten GGUF/ggml) sin fork.
 llama.cpp se toma como checkout hermano: `-Dllama-dir=/ruta/a/llama.cpp`.
 
 **Gate (verde):** test wrapper (positivo+negativo), `nm -D` muestra
-`zkml_llama_*` + `zkml_*` heredados, y `tools/integration/verify_llama_adapter.py`
+`zkml_llama_*` + `zkml_*` heredados, y `tools/integration/verify_adapter_root.py`
 verifica el root contra el auditor independiente.
 
 **Commit:** `feat(adapters): llama.cpp attestation + witness wrapper (zero-fork, public API)`
@@ -227,24 +227,78 @@ build test` (81/81), `abi`, `fmt` y `llama-adapter` siguen verdes.
 
 ---
 
-### Stage 4 — ktransformers-zig reference adapter (target original, ahora último)
+### Stage 4 — ktransformers-zig reference adapter — ✅ DONE
 
-**Layout:** `adapters/ktransformers/` — implementa el glue `kt_*` que
-`TODO.md`/`zkML.md` ya especifican, pero **llama al contrato `zkml_engine.h`**
-como todos los demás.
+**Layout:** `adapters/ktransformers/` — el glue `kt_*` → `zkml_*` que
+`TODO.md`/`zkML.md` ya esbozaban, pero llama al contrato genérico
+(`zkml_engine.h`) como todos los demás.
+
+**Implementado:** `libkt_zkml_glue.so` compilado contra el `kt_kernel.h` del
+propio engine y enlazado a su `.so` prebuilt, con primitiva genérica
+`kt_zkml_attest_tensors`, helpers tipados para MoE (BF16) y LlamaMoe
+(bloques GGUF), `kt_zkml_transcript_seed` y el shim `kt_zkml_witness_*`.
+Gate `zig build kt-adapter` con 9 checks + cross-check del auditor.
 
 | Archivo | Rol |
 |---|---|
-| `adapters/ktransformers/kt_glue.c` | Los 4 wrappers planificados: `kt_weights_merkle_root`, `kt_mla_weights_merkle_root`, `kt_transcript_seed`, + witness hooks del recorded mode de `kt_kernel.h` |
-| `adapters/ktransformers/README.md` | Mapea nombres `kt_*` viejos → llamadas `zkml_*` genéricas (nota de migración para ktransformers-zig) |
-| `adapters/ktransformers/test_glue.c` | Mismos tests de attestation positivo/negativo que el adapter de llama |
+| `adapters/ktransformers/kt_glue.h` | API `kt_zkml_*` sobre `kt_kernel.h` + `zkml_c.h`; `kt_zkml_tensor_view` |
+| `adapters/ktransformers/kt_glue.c` | Primitiva genérica, helpers MoE/LlamaMoe, seed F1, shim de witness, `kt_zkml_cpu_variant` |
+| `adapters/ktransformers/test_glue.c` | Positivo, determinismo, orden, **negativo**, validación de argumentos, configs BF16 y Q8_0, seed, witness, variante del engine |
+| `adapters/ktransformers/CMakeLists.txt` | Build standalone (linkea `libkt_kernel_ext_<variant>.so` + `libzkml.so`) |
+| `adapters/ktransformers/README.md` | Tabla de mapeo `kt_*` → `zkml_*` + los huecos documentados |
+| `build.zig` | Paso `kt-adapter` (CMake + test + `verify_adapter_root.py`) |
 
-**Posicionamiento:** este es el **adapter de referencia** — el más simple; los
-demás adapters se miden contra su checklist.
+**Hallazgos que corrigieron el plan (los `kt_*` de `zkML.md` nunca se implementaron):**
 
-**Gate:** `zig build kt-adapter` + su test.
+1. **`kt_weights_merkle_root` / `kt_mla_weights_merkle_root` no existen** —
+   sólo están propuestos en `zkML.md`. El glue los provee con prefijo
+   `kt_zkml_` (no reclama esos nombres: si el engine los implementa un día,
+   dos `.so` con el mismo símbolo harían ambiguo el binder).
+2. **Los handles `KT_MOE`/`KT_MLA` son opacos y no hay getter de pesos ni
+   callback por tensor** — `kt_moe_load_weights` sólo copia desde los
+   punteros del config que el caller conserva. Por eso los helpers tipados
+   attestan **el config** que se va a pasar a `kt_moe_new`: los bytes exactos
+   que el engine copiará, hasheados antes de la copia.
+3. **No hay recorded mode**: `kt_kernel.h` no expone ciclo begin/end de
+   grabación, ni tipo de registro, ni replay. El único cache interno
+   (`ForwardCache`, path SFT) es para backprop, no es alcanzable desde C y
+   no es replayable. `kt_zkml_witness_*` queda como la superficie de hook
+   que el engine debería invocar cuando exista, probada hoy.
+4. **MLA/DSV3 sin shapes en el header** (falta `v_head_dim`): no hay helper
+   tipado; se documenta el uso de la primitiva genérica con views del
+   caller. Igual con `gate/up/down_scale`: su layout depende de
+   `quant_config` y no está fijado en C, así que se excluyen en vez de
+   adivinar.
+5. **Los tamaños salen del engine**: `kt_type_row_bytes(n, type)` (exportado
+   por la `.so` prebuilt) en vez de duplicar la tabla de tamaños de bloque;
+   si no puede dimensionar una fila devuelve 0 y el glue falla en vez de
+   hashear un número equivocado de bytes. Multiplicaciones con overflow
+   check.
+
+**Gate:** `zig build kt-adapter` verde (9/9 checks, root `7cf94ce9…`
+verificado por el auditor independiente). `zig build test` (81/81), `abi`,
+`verify`, `llama-adapter` y `vllm-adapter` siguen verdes.
 
 **Commit:** `feat(adapters): ktransformers-zig reference glue (kt_* → zkml_* mapping)`
+
+---
+
+## Estado del plan multi-motor
+
+| Stage | Adapter | Mecanismo | Gate |
+|---|---|---|---|
+| 0 | core de-kt + `zkml_engine.h` | — | `zig build test` |
+| 5 | Witness ABI v2 | — | `zig build test` |
+| 1 | `adapters/llama_cpp/` | wrapper C++ zero-fork sobre `gguf.h` | `zig build llama-adapter` |
+| 2 | `adapters/zig_ai/` | import de módulo Zig | `zig build test` (11 tests) |
+| 3 | `adapters/vllm/` | ctypes sobre `libzkml.so` | `zig build verify` (15 tests) |
+| 4 | `adapters/ktransformers/` | glue C de referencia | `zig build kt-adapter` |
+
+Los cuatro adapters están implementados y verificados contra el auditor
+independiente. Pendiente para F0: **medir el overhead de carga** (<5%) con
+pesos reales, y decidir si `kt_glue`'s exclusión de escalas/zero-points y la
+falta de shapes MLA/DSV3 se resuelven upstream (documentado, no parcheado
+aquí).
 
 ---
 
