@@ -1,4 +1,5 @@
-//! zig-zkml — verifiable-inference layer for ktransformers-zig.
+//! zig-zkml — verifiable-inference layer for host inference engines
+//! (llama.cpp, vLLM, zig-ai, ktransformers-zig — via adapters/<engine>/).
 //!
 //! Single module root: all libraries are file imports so unit tests in
 //! every file are collected by `zig build test` (test blocks are only

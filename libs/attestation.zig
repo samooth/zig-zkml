@@ -1,7 +1,7 @@
 //! Weights attestation — F0 Merkle root over model tensors.
 //!
 //! BLUE_PRINT §5.3: `loadWeights` hashes every tensor into a leaf and the
-//! root is exposed as `kt_weights_merkle_root`. This module wraps the
+//! root is exposed as `zkml_attestor_root`. This module wraps the
 //! Blake3 Merkle tree from `libs/merkle.zig` with an API oriented toward
 //! model weight loading.
 

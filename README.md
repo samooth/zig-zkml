@@ -1,8 +1,8 @@
 # zig-zkml
 
-Verifiable-inference (zkML) layer for [ktransformers-zig](../ktransformers-zig): prove that a MoE layer's output was produced by the committed model weights, using the native kernels as the witness generator.
+Verifiable-inference (zkML) layer for host inference engines — **llama.cpp, vLLM, zig-ai, ktransformers-zig** — via per-engine adapters: prove that a layer's output was produced by the committed model weights, using the engine's native kernels as the witness generator.
 
-**Status: F0/F1 foundations implemented.** The technical specification lives in [BLUE_PRINT.md](BLUE_PRINT.md) (Spanish). [zkML.md](zkML.md) is the earlier motivation document; BLUE_PRINT.md supersedes its open decisions. The L0/L2 foundations (field, merkle, transcript, tensor, trace, statement, attestation) are working — the C API integration with ktransformers-zig and the STARK prover (F2+) come next.
+**Status: F0/F1 foundations implemented; multi-engine redesign staged.** The technical specification lives in [BLUE_PRINT.md](BLUE_PRINT.md) (Spanish); the multi-engine compatibility plan (adapter matrix, staging, llama.cpp wrapper design) lives in [PLAN_MULTI_ENGINE.md](PLAN_MULTI_ENGINE.md). [zkML.md](zkML.md) is the earlier motivation document; BLUE_PRINT.md supersedes its open decisions. The L0/L2 foundations (field, merkle, transcript, tensor, trace, statement, attestation) are working — the engine adapters (Stages 0–4) and the STARK prover (F2+) come next.
 
 ## What it does
 
@@ -26,7 +26,8 @@ Key design decisions (full rationale in BLUE_PRINT.md):
 ## Architecture
 
 ```
-L4  C API                     kt_prove_* / kt_verify_* (kt_kernel.h pattern)
+L4  C API                     zkml_* (attest/prove/verify + witness ABI v2)
+                              — adapters per engine in adapters/<engine>/
 L3  Model compiler            CircuitGraph → AirGraph
 L2  zkML gadgets  ◄ this repo QuantTensor, gemm, quant/dequant, swiglu,
                               routing, lookups (LogUp)
@@ -40,7 +41,12 @@ from the root module's file set, so all libs are file imports):
 ```
 zkml.zig           # module root — re-exports everything, collects all tests
 include/
-└── zkml_c.h       # C ABI (zkml_* — F0/F1 surface, BLUE_PRINT §8)
+├── zkml_c.h       # C ABI (zkml_* — F0/F1 surface, BLUE_PRINT §8)
+└── zkml_engine.h  # engine adapter contract (weight stream, witness,
+                   #        prove/verify lifecycle, stage checklist)
+adapters/
+└── README.md      # per-engine integration matrix (llama.cpp, zig-ai,
+                   #        vLLM, ktransformers — PLAN_MULTI_ENGINE.md)
 libs/
 ├── field.zig      # [done] Goldilocks p = 2^61−1 (vendored L0)
 ├── merkle.zig     # [done] Blake3 tree (cached root, orphan self-pairing,
@@ -78,24 +84,28 @@ re-derives the root from the manifest and verifies the proof bytes.
 
 | Phase | Deliverable | Go/no-go |
 |---|---|---|
-| **F0** | `kt_weights_merkle_root` — weights attestation (Blake3 + Merkle at load time) — **lib + C ABI + independent auditor done** (`zig build verify` gate); ktransformers-zig glue pending | load overhead < 5% |
-| **F1** | `kt_transcript_seed` — deterministic, auditable sampling — **`zkml_transcript_seed` done in the ABI**; kt glue pending | zero kernel changes |
-| **F2** | `tensor` lib + GEMM gadget (AIR) with positive+negative tests — **tensor lib done**; gadget pending | two spikes first: dep toolchain (semver `0.16.0-dev`), STARK/FRI over Goldilocks |
-| **F3** | `kt_prove_moe_layer` / `kt_verify_moe_layer` for one expert (Qwen3-Next shapes) | proof < 1 MB, verify < 100 ms, tampered witness (±1 ulp) rejected |
+| **F0** | Weights attestation (Blake3 + Merkle at load time) — **lib + C ABI + independent auditor done** (`zig build verify` gate); engine adapters (llama.cpp, zig-ai, vLLM, ktransformers) pending per PLAN_MULTI_ENGINE Stages 0–4 | load overhead < 5% |
+| **F1** | Deterministic, auditable sampling — **`zkml_transcript_seed` done in the ABI**; adapters consume it via the engine contract | zero kernel changes |
+| **Witness ABI v2** | `zkml_witness_*` session/record/finalize (additive) — Stage 5 of the multi-engine plan | determinism test green |
+| **F2** | `tensor` lib + GEMM gadget (AIR) with positive+negative tests — **tensor + FRI done**; STARK backend (constraint composition) pending | two spikes first: dep toolchain (semver `0.16.0-dev`), STARK/FRI over Goldilocks |
+| **F3** | `zkml_prove_layer` / `zkml_verify_layer` for one layer (Qwen3-Next shapes) | proof < 1 MB, verify < 100 ms, tampered witness (±1 ulp) rejected |
 | **F4** | fingerprint-sumcheck GEMM + multi-block recursion | product decision |
 
 Realistic cost expectations (measured against DeepSeek-V3/Qwen3-Next shapes): weights attestation ~1x; one expert block ~10³x native (sub-second to seconds); full model **not viable today** — state of the art is ≤1B params with dedicated teams.
 
 ## Requirements
 
-- Zig `0.16.0-dev.2535+` (toolchain lock shared with ktransformers-zig)
+- Zig `0.16.0` (stable; `0.16.0-dev.2535+` also works)
 - Python 3.8+ with `blake3` (`pip install blake3`) — only for the independent audit tool / `zig build verify`
 - [zig-algebra](https://github.com/samooth/zig-algebra) (L0) and [zig-zk](https://github.com/samooth/zig-zk) (L1) — not needed until F2 (F0/F1 are self-contained in `libs/`); see BLUE_PRINT.md §12
 - Linux x86_64 (primary)
+- Per-adapter extras: llama.cpp checkout + CMake (Stage 1), vLLM + ctypes (Stage 3) — see `adapters/`
 
 ## Documentation
 
 - [BLUE_PRINT.md](BLUE_PRINT.md) — authoritative technical design (Spanish)
+- [PLAN_MULTI_ENGINE.md](PLAN_MULTI_ENGINE.md) — multi-engine adapter plan, staging, llama.cpp wrapper pros/cons
+- [TODO.md](TODO.md) — actionable pending work
 - [zkML.md](zkML.md) — motivation and prior-art survey (Spanish)
 
 ## License

@@ -1,7 +1,7 @@
 //! Trace recorder — captures witness data from native inference kernels.
 //!
-//! BLUE_PRINT §6.2: the TraceRecorder is multi-threaded (ktransformers-zig
-//! runs experts in parallel). Recording is by slot (layer, op, expert,
+//! BLUE_PRINT §6.2: the TraceRecorder is multi-threaded (MoE engines
+//! run experts in parallel). Recording is by slot (layer, op, expert,
 //! tp_rank) with per-slot buffers. `finalize()` absorbs in CANONICAL order
 //! so the Fiat-Shamir transcript is deterministic regardless of thread
 //! scheduling.

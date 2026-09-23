@@ -87,7 +87,7 @@ test "requant int8 to fixed q8.8 converts correctly" {
 test "requant fixed q16.16 to int8 clamps" {
     const t = std.testing;
     const a = t.allocator;
-    const vals = [_]Goldilocks{Goldilocks.fromU64(200), Goldilocks.fromU64(100)};
+    const vals = [_]Goldilocks{ Goldilocks.fromU64(200), Goldilocks.fromU64(100) };
     const out = try requantFixedQ16_16ToInt8(a, &vals);
     defer a.free(out);
     try t.expectEqual(@as(i8, 127), out[0]);

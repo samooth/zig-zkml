@@ -123,7 +123,7 @@ pub fn build(b: *std.Build) void {
 
     // Fmt check.
     const fmt = b.addFmt(.{
-        .paths = &.{ "zkml.zig", "libs", "tools" },
+        .paths = &.{ "zkml.zig", "libs", "tools", "adapters" },
         .check = true,
     });
     const fmt_step = b.step("fmt", "Check formatting");

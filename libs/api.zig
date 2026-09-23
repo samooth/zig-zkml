@@ -1,6 +1,6 @@
-//! C ABI — F0/F1 surface for ktransformers-zig (BLUE_PRINT §8).
+//! C ABI — F0/F1 surface for host inference engines (BLUE_PRINT §8).
 //!
-//! Conventions (mirroring the kt_kernel.h pattern):
+//! Conventions (mirroring the engine-adapter pattern):
 //!   - Opaque handle (`ZKML_Attestor`); allocator passed at creation
 //!     (B1: everything derived from the handle is freed by its destroy /
 //!     free functions — no orphaned memory, no dedicated free needed).
@@ -200,7 +200,7 @@ pub export fn zkml_proof_verify(
 // --- Deterministic transcript seed (F1) ---
 
 /// Derive a deterministic 32-byte sampling seed from a context (BLUE
-/// PRINT §8: kt_transcript_seed pattern — reproducible sampling with no
+/// BLUE_PRINT §8: zkml_transcript_seed — reproducible sampling with no
 /// hidden state: same context → same seed, always).
 pub export fn zkml_transcript_seed(
     context: ?[*]const u8,

@@ -68,7 +68,7 @@ pub const GroupTop2Gadget = struct {
 
 test "topk fragment rows = rows * k" {
     const t = std.testing;
-    const scores = [_]Goldilocks{Goldilocks.one, Goldilocks.one, Goldilocks.one} ** 8;
+    const scores = [_]Goldilocks{ Goldilocks.one, Goldilocks.one, Goldilocks.one } ** 8;
     const g = TopKGadget{ .rows = 4, .k = 2, .gate_scores = &scores };
     var frag = g.airFragment(t.allocator) catch unreachable;
     defer frag.deinit(t.allocator);

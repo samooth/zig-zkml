@@ -88,7 +88,7 @@ test "flattenToFp2 pads to power of 2" {
     const t = std.testing;
     const a = t.allocator;
 
-    var data = [_]Goldilocks{Goldilocks.one, Goldilocks.one, Goldilocks.one} ** 5;
+    var data = [_]Goldilocks{ Goldilocks.one, Goldilocks.one, Goldilocks.one } ** 5;
     const trace = Trace{ .rows = 5, .cols = 1, .data = data[0..] };
     const evals = try flattenToFp2(a, trace);
     defer a.free(evals);

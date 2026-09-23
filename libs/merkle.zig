@@ -1,7 +1,8 @@
 //! Merkle tree over tensor leaves — Blake3 domain-separated.
 //!
 //! F0 weights attestation (BLUE_PRINT §5.3): `loadWeights` hashes every
-//! tensor into a leaf and the root is exposed as `kt_weights_merkle_root`.
+//! tensor into a leaf and the root is exposed as `zkml_attestor_root`
+//! (engine adapters may re-wrap it under engine-specific names).
 //! Design points:
 //!   - Leaf = Blake3("zkml.wleaf" || tag || len_le64 || data...) where
 //!     `tag` names the tensor (stable across load-order permutations — the

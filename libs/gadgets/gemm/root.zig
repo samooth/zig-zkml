@@ -66,5 +66,5 @@ test "gemm air fragment basic structure" {
     try t.expect(frag.columns.len == 4);
     try t.expect(frag.constraints.len == 1);
     try t.expect(frag.constraints[0].degree == 2);
-    try t.expect(frag.rows == 0);  // 2*2*2/16 = 0
+    try t.expect(frag.rows == 0); // 2*2*2/16 = 0
 }

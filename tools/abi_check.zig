@@ -22,7 +22,8 @@ pub fn main(init: std.process.Init) !void {
     const outdir = args[1];
     const proof_name = if (args.len > 2) args[2] else "gate.0.w";
 
-    // --- Build the attestation through the C ABI exactly as kt would ---
+    // --- Build the attestation through the C ABI exactly as an engine
+    //     adapter would (weight stream: one add() per tensor at load) ---
     const handle = api.api.zkml_attestor_create(@ptrCast(&allocator)) orelse {
         std.debug.print("attestor_create failed\n", .{});
         return error.AbiCreate;

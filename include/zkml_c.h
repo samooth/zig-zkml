@@ -1,7 +1,9 @@
 /*
  * zkml_c.h — C ABI for zig-zkml (F0/F1 surface, BLUE_PRINT §8).
  *
- * Verifiable-inference foundations for ktransformers-zig:
+ * Verifiable-inference foundations for host inference engines
+ * (llama.cpp, vLLM, zig-ai, ktransformers-zig — via adapters/<engine>/,
+ * see zkml_engine.h):
  *   - F0: weights attestation (Merkle root over model tensors)
  *   - F1: deterministic transcript seed (reproducible sampling)
  *
@@ -45,7 +47,7 @@ typedef struct ZKML_Attestor ZKML_Attestor;
  * std.mem.Allocator (from the host runtime); it is captured and must
  * outlive the handle. Returns NULL on allocation failure.
  *
- * The typical kt_kernel.h glue passes its own captured allocator here.
+ * The typical engine adapter passes its own captured allocator here.
  */
 ZKML_Attestor* zkml_attestor_create(void* allocator);
 
@@ -108,7 +110,7 @@ int zkml_proof_verify(void* allocator,
 /*
  * F1: derive a deterministic 32-byte sampling seed from a context.
  * Same context -> same seed, always (no clocks, no hidden state).
- * Use: reproducible/auditable sampling in ktransformers-zig.
+ * Use: reproducible/auditable sampling in the host engine.
  */
 int zkml_transcript_seed(const uint8_t* context, size_t context_len,
                          uint8_t* seed_out /* 32 bytes */);
