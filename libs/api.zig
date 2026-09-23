@@ -62,6 +62,17 @@ pub const ZKML_Attestor = struct {
     }
 };
 
+// --- Process allocator (C-boundary entry for pure-C consumers) ---
+
+/// Stable process-wide allocator returned to C callers who have no Zig
+/// allocator of their own (llama.cpp wrapper, vLLM ctypes, ...). Pass the
+/// result to any `*_create` entry (B1: captured; never free it).
+var process_allocator: std.mem.Allocator = std.heap.smp_allocator;
+
+pub export fn zkml_allocator_process() *anyopaque {
+    return &process_allocator;
+}
+
 // --- Attestor lifecycle (F0) ---
 
 /// Create an attestor. `allocator` must remain valid for the handle's
@@ -331,6 +342,7 @@ pub export fn zkml_witness_session_destroy(self: ?*ZKML_Witness) void {
 
 comptime {
     // Force emission (BLUE_PRINT §8: comptime { _ = &fn } verified with nm).
+    _ = &zkml_allocator_process;
     _ = &zkml_attestor_create;
     _ = &zkml_attestor_add;
     _ = &zkml_attestor_finish;
@@ -351,6 +363,20 @@ comptime {
 // --- Tests: exercise the ABI exactly as C would (F0 go/no-go §13) ---
 
 const testing = std.testing;
+
+test "abi: process allocator usable for attestor" {
+    // Pure-C consumers (llama.cpp wrapper) pass zkml_allocator_process()
+    // instead of constructing a Zig allocator themselves.
+    const h = zkml_attestor_create(zkml_allocator_process()) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(i32, 0), zkml_attestor_add(h, "t".ptr, 1, "x".ptr, 1));
+    try testing.expectEqual(@as(i32, 0), zkml_attestor_finish(h));
+    var root: [32]u8 = undefined;
+    try testing.expectEqual(@as(i32, 0), zkml_attestor_root(h, &root));
+    zkml_attestor_destroy(h);
+
+    const w = zkml_witness_session_create(zkml_allocator_process()) orelse return error.TestUnexpectedResult;
+    zkml_witness_session_destroy(w);
+}
 
 test "abi: attestor lifecycle, proof, standalone verify" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);

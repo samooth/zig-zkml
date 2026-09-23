@@ -100,23 +100,45 @@ Incluido ahora (decisión del usuario), no diferido a F2.
 
 ---
 
-### Stage 1 — llama.cpp wrapper (primer motor)
+### Stage 1 — llama.cpp wrapper (primer motor) — ✅ DONE
 
 **Layout:** `adapters/llama_cpp/` dentro de zig-zkml.
 
+**Implementado:** `zkml_llama_attest_gguf(path, root_out)` +
+`zkml_llama_attest_gguf_manifest(path, root_out, manifest_path)`, shared
+`libzkml_llama.so`, test gateado (positivo + determinismo + negativo), y
+`zig build llama-adapter` (CMake + test + cross-check Python). Añadido
+también `zkml_allocator_process()` al core (allocator Zig estable para
+consumidores C puros) y el target **shared** `libzkml.so` en `build.zig`.
+
 | Archivo | Rol |
 |---|---|
-| `adapters/llama_cpp/wrapper.cpp` | Dos rutas: **(a) attestation**: `llama_model_init_from_user` → callback `set_tensor_data` streamea cada tensor a `zkml_attestor_create/add/finish/root`; **(b) witness**: contexto creado vía helper que setea `llama_context_params.cb_eval` → por op, extrae bytes I/O del tensor → `TraceRecorder.record(...)` vía shim C |
-| `adapters/llama_cpp/zkml_llama.h` | API pública del wrapper: `zkml_llama_attest_gguf(path, root_out[32])`, `zkml_llama_create_context(...)` (inyecta cb_eval), `zkml_llama_finalize_witness(...)` |
-| `adapters/llama_cpp/CMakeLists.txt` | Build de `libzkml_llama.so` linkeando lib de llama.cpp + `libzkml.a` (patrón de `examples/gguf-hash/CMakeLists.txt`) |
-| `adapters/llama_cpp/README.md` | Pasos de build, commit pineado de llama.cpp, nota mmap |
-| `adapters/llama_cpp/test_attest.cpp` | Positivo: GGUF diminuto → root matchea cross-check con `tools/verify_weights.py`; Negativo: corrompe 1 byte de tensor → root distinto |
-| `tools/integration/verify_llama_adapter.py` | Cross-verificador Python (reusa lógica de `verify_weights.py`) |
+| `adapters/llama_cpp/wrapper.cpp` | **Attestation**: recorre el GGUF con el lector público `gguf.h` (metadata `no_alloc` + lectura *streamed* de cada tensor) → `zkml_attestor_add/finish/root`; emite manifest JSON para el auditor |
+| `adapters/llama_cpp/zkml_llama.h` | API pública del wrapper: `zkml_llama_attest_gguf` (+ variante manifest) |
+| `adapters/llama_cpp/CMakeLists.txt` | Build standalone de `libzkml_llama.so` + `zkml_llama_test` (linkea `libggml-base.so` + `libzkml.so`) |
+| `adapters/llama_cpp/README.md` | Build, commit pineado de llama.cpp (`1c3c9674d`, v0.0.10269), notas de diseño |
+| `adapters/llama_cpp/test_attest.cpp` | Positivo + determinismo + **negativo** (1 byte corrupto → root distinto); emite `root.hex` + `manifest.json` |
+| `tools/integration/verify_llama_adapter.py` | Wrapper fino que delega en `tools/verify_weights.py` (auditor independiente) |
+| `libs/api.zig` + `include/zkml_c.h` | `zkml_allocator_process()` — allocator de proceso para consumidores C (aditivo) |
+| `build.zig` | Target shared `libzkml.so`; paso `llama-adapter` (no bloquea el build default) |
 
-**Build:** step nuevo `zig build llama-adapter` (invoca CMake; no toca build default).
-llama.cpp se toma como checkout hermano: `-DLLAMA_DIR=llama.cpp`.
+**Desviación del plan (documentada):** la ruta (a) usa el lector
+`gguf.h` público en vez de `llama_model_init_from_user` + `set_tensor_data`.
+Razón: el hook `set_tensor_data` se invoca *antes* de que existan los
+bytes (el callback debe *rellenar* el tensor, no observarlo), así que para
+atestar un fichero GGUF haría falta un canal lateral con mmap del fichero
+y el resultado sería idéntico. La materialización del modelo (y por tanto
+el hook) sólo aporta valor cuando además se va a hacer inferencia — eso es
+la ruta (b) de witness con `cb_eval`, que llega con la integración F2.
+Cubre los mismos motores (koboldcpp, PowerInfer, beellama.cpp, BitNet
+comparten GGUF/ggml) sin fork.
 
-**Gate:** test wrapper pasa; `nm` en `libzkml_llama.so` muestra `zkml_llama_*` + `zkml_*` heredados.
+**Build:** `zig build llama-adapter` (invoca CMake; no toca build default).
+llama.cpp se toma como checkout hermano: `-Dllama-dir=/ruta/a/llama.cpp`.
+
+**Gate (verde):** test wrapper (positivo+negativo), `nm -D` muestra
+`zkml_llama_*` + `zkml_*` heredados, y `tools/integration/verify_llama_adapter.py`
+verifica el root contra el auditor independiente.
 
 **Commit:** `feat(adapters): llama.cpp attestation + witness wrapper (zero-fork, public API)`
 

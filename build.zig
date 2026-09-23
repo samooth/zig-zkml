@@ -31,6 +31,15 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(lib);
 
+    // Shared library for out-of-language consumers (llama.cpp CMake
+    // adapter, vLLM ctypes). Same exports as the static lib.
+    const dylib = b.addLibrary(.{
+        .name = "zkml",
+        .root_module = lib_mod,
+        .linkage = .dynamic,
+    });
+    b.installArtifact(dylib);
+
     // Unit tests for the library (all files, via the single module root).
     const tests = b.addTest(.{
         .root_module = lib_mod,
@@ -66,6 +75,7 @@ pub fn build(b: *std.Build) void {
         \\nm zig-out/lib/libzkml.a | grep -q zkml_attestor_destroy && \
         \\nm zig-out/lib/libzkml.a | grep -q zkml_proof_verify && \
         \\nm zig-out/lib/libzkml.a | grep -q zkml_transcript_seed && \
+        \\nm zig-out/lib/libzkml.a | grep -q zkml_allocator_process && \
         \\nm zig-out/lib/libzkml.a | grep -q zkml_witness_session_create && \
         \\nm zig-out/lib/libzkml.a | grep -q zkml_witness_record_op && \
         \\nm zig-out/lib/libzkml.a | grep -q zkml_witness_finalize && \
@@ -124,6 +134,56 @@ pub fn build(b: *std.Build) void {
     const run_fri_audit = b.addRunArtifact(fri_audit_exe);
     const spike_step = b.step("spike", "F2 spikes: FRI soundness audit over Goldilocks");
     spike_step.dependOn(&run_fri_audit.step);
+
+    // --- Stage 1: llama.cpp adapter (optional — needs CMake + built llama.cpp) ---
+    // Build the zero-fork GGUF attestation wrapper and run its gated test
+    // (positive + negative + Python cross-check). Not part of the default
+    // build; invoke with `zig build llama-adapter`.
+    const llama_dir = b.option(
+        []const u8,
+        "llama-dir",
+        "Path to a built llama.cpp checkout (default: sibling ../llama.cpp)",
+    ) orelse b.fmt("{s}/../llama.cpp", .{b.build_root.path orelse "."});
+
+    const llama_cfg = b.addSystemCommand(&.{
+        "cmake", "-S", "adapters/llama_cpp", "-B", ".zig-cache/llama_adapter",
+    });
+    llama_cfg.addArg(b.fmt("-DLLAMA_DIR={s}", .{llama_dir}));
+    // Ensure libzkml.so exists before CMake configure checks for it.
+    llama_cfg.step.dependOn(b.getInstallStep());
+
+    const llama_build = b.addSystemCommand(&.{
+        "cmake", "--build", ".zig-cache/llama_adapter", "--parallel",
+    });
+    llama_build.step.dependOn(&llama_cfg.step);
+
+    const llama_artifacts = ".zig-cache/llama_adapter/artifacts";
+    const llama_test = b.addSystemCommand(&.{
+        "sh", "-c",
+        "mkdir -p " ++ llama_artifacts ++ " && " ++
+            ".zig-cache/llama_adapter/zkml_llama_test " ++ llama_artifacts,
+    });
+    llama_test.step.dependOn(&llama_build.step);
+
+    const llama_nm = b.addSystemCommand(&.{
+        "sh", "-c",
+        "nm -D .zig-cache/llama_adapter/libzkml_llama.so | grep -q zkml_llama_attest_gguf && " ++
+            "nm -D .zig-cache/llama_adapter/libzkml_llama.so | grep -q zkml_attestor_create && " ++
+            "echo 'llama adapter symbols: ok'",
+    });
+    llama_nm.step.dependOn(&llama_build.step);
+
+    const llama_py = b.addSystemCommand(&.{
+        "python3", "tools/integration/verify_llama_adapter.py", llama_artifacts,
+    });
+    llama_py.step.dependOn(&llama_test.step);
+
+    const llama_step = b.step(
+        "llama-adapter",
+        "Build + test llama.cpp attestation adapter (Stage 1; needs CMake + built llama.cpp)",
+    );
+    llama_step.dependOn(&llama_nm.step);
+    llama_step.dependOn(&llama_py.step);
 
     // Fmt check.
     const fmt = b.addFmt(.{

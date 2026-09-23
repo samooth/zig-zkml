@@ -41,6 +41,7 @@ comptime {
     _ = &trace.TraceRecorder.finalize;
     _ = &statement.StatementLayer.serialize;
     _ = &attestation.WeightsAttestor.init;
+    _ = &api.zkml_allocator_process;
     _ = &api.zkml_attestor_create;
     _ = &api.zkml_witness_session_create;
     _ = &api.zkml_witness_record_op;

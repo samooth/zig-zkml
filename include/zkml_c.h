@@ -47,6 +47,13 @@ enum {
 typedef struct ZKML_Attestor ZKML_Attestor;
 
 /*
+ * Process-wide Zig allocator for pure-C consumers (llama.cpp wrapper,
+ * vLLM ctypes, ...): pass the returned pointer to any *_create entry
+ * point. Never free it; valid for the process lifetime (B1 capture).
+ */
+void* zkml_allocator_process(void);
+
+/*
  * Create an attestor. `allocator` is a pointer to a stable
  * std.mem.Allocator (from the host runtime); it is captured and must
  * outlive the handle. Returns NULL on allocation failure.

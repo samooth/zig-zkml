@@ -8,7 +8,7 @@ documented as READMEs next to the adapter code.
 
 | Adapter | Stage | Mechanism |
 |---|---|---|
-| `llama_cpp/` | 1 | Zero-fork wrapper over public `llama.h` (`llama_model_init_from_user` + `set_tensor_data`, `cb_eval`) |
+| `llama_cpp/` | 1 ✅ | Zero-fork wrapper over the public `gguf.h` reader (streamed tensors → attestor) |
 | `zig_ai/` | 2 | Direct Zig module import; GGUF loader → attestor; `MetricHooks` → `TraceRecorder` |
 | `vllm/` | 3 | Shared `libzkml.so` + ctypes; `BaseModelLoader` subclass |
 | `ktransformers/` | 4 | Reference glue (`kt_*` → `zkml_*` mapping) |
