@@ -66,6 +66,10 @@ pub fn build(b: *std.Build) void {
         \\nm zig-out/lib/libzkml.a | grep -q zkml_attestor_destroy && \
         \\nm zig-out/lib/libzkml.a | grep -q zkml_proof_verify && \
         \\nm zig-out/lib/libzkml.a | grep -q zkml_transcript_seed && \
+        \\nm zig-out/lib/libzkml.a | grep -q zkml_witness_session_create && \
+        \\nm zig-out/lib/libzkml.a | grep -q zkml_witness_record_op && \
+        \\nm zig-out/lib/libzkml.a | grep -q zkml_witness_finalize && \
+        \\nm zig-out/lib/libzkml.a | grep -q zkml_witness_session_destroy && \
         \\echo 'symbols: ok'
     });
     nm.step.dependOn(b.getInstallStep());

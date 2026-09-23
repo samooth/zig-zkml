@@ -543,14 +543,20 @@ int   zkml_proof_verify(void* allocator, const uint8_t* proof, size_t len,
 int   zkml_transcript_seed(const uint8_t* ctx, size_t ctx_len,
                            uint8_t seed_out[32]);
 
-// --- Witness ABI v2 (aditivo — Stage 5 del plan multi-motor) ---
-//   ciclo: begin_layer → record_op* → end_layer → finalize
-int   zkml_witness_session_create(void* allocator);
-int   zkml_witness_begin_layer(int session, uint32_t layer_idx, ...);
-int   zkml_witness_record_op(int session, const ZKML_SlotKey* key,
+// --- Witness ABI v2 (aditivo — HECHO: Stage 5 multi-motor) ---
+//   ciclo: create -> begin_layer -> record_op* -> end_layer (por capa)
+//          -> finalize(stmt_hash, trace_hash) -> destroy
+//   ZKML_SlotKey: layer u32, expert u16, op u8 (ZKML_OP_*), rank u8 (8 B)
+typedef struct ZKML_Witness ZKML_Witness;
+typedef struct ZKML_SlotKey ZKML_SlotKey;
+ZKML_Witness* zkml_witness_session_create(void* allocator);
+int   zkml_witness_begin_layer(ZKML_Witness*, uint32_t layer_idx);
+int   zkml_witness_record_op(ZKML_Witness*, const ZKML_SlotKey* key,
                              const void* payload, size_t payload_len);
-int   zkml_witness_end_layer(int session, uint8_t trace_hash_out[32]);
-int   zkml_witness_finalize(int session, uint8_t witness_id_out[32]);
+int   zkml_witness_end_layer(ZKML_Witness*);
+int   zkml_witness_finalize(ZKML_Witness*, const uint8_t stmt_hash[32],
+                            uint8_t trace_hash_out[32]);
+void  zkml_witness_session_destroy(ZKML_Witness*);
 
 // --- F2+ (pendiente): verifiable inference por capa ---
 typedef struct ZKML_PROVER ZKML_PROVER;

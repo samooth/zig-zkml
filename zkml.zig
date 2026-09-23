@@ -42,6 +42,9 @@ comptime {
     _ = &statement.StatementLayer.serialize;
     _ = &attestation.WeightsAttestor.init;
     _ = &api.zkml_attestor_create;
+    _ = &api.zkml_witness_session_create;
+    _ = &api.zkml_witness_record_op;
+    _ = &api.zkml_witness_finalize;
     _ = &gadgets.gemm.GemmGadget.airFragment;
     _ = &gadgets.nonlin.SiLULookup.airFragment;
     _ = &gadgets.norm.RmsNormGadget.airFragment;

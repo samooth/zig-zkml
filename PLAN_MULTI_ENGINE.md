@@ -79,9 +79,11 @@ es solo (a) doc/comments `kt_*`, (b) tipos con forma MoE (`SlotKey{layer,op,expe
 
 ---
 
-### Stage 5 — Witness hook ABI (solidificación cross-cutting)
+### Stage 5 — Witness hook ABI (solidificación cross-cutting) — ✅ DONE
 
 Incluido ahora (decisión del usuario), no diferido a F2.
+
+**Implementado**: `ZKML_Witness` handle + `zkml_witness_session_create/begin_layer/record_op/end_layer/finalize/session_destroy`, `ZKML_SlotKey` (8 B, alignment-packed: layer u32, expert u16, op u8, rank u8), `ZKML_OP_*`, `ZKML_ABI_VERSION = 2`. Pruebas 69/69.
 
 | Archivo | Cambio |
 |---|---|

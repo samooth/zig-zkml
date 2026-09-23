@@ -1,24 +1,28 @@
-//! C ABI — F0/F1 surface for host inference engines (BLUE_PRINT §8).
+//! C ABI — F0/F1/F5 surface for host inference engines (BLUE_PRINT §8).
 //!
 //! Conventions (mirroring the engine-adapter pattern):
-//!   - Opaque handle (`ZKML_Attestor`); allocator passed at creation
-//!     (B1: everything derived from the handle is freed by its destroy /
-//!     free functions — no orphaned memory, no dedicated free needed).
+//!   - Opaque handle (`ZKML_Attestor` / `ZKML_Witness`); allocator passed
+//!     at creation (B1: everything derived from the handle is freed by
+//!     its destroy / free functions — no orphaned memory).
 //!   - Status codes: 0 = OK, negative = error (`Status`).
 //!   - Every entry point is `export fn` (C convention by default) and
 //!     force-emitted via the comptime trap at the bottom; `zig build abi`
 //!     asserts the symbols land in the binary.
 //!   - Caller pointers are read within the call only; names are duped
-//!     where retained, tensor data is never retained.
+//!     where retained, tensor data / payloads are copied (never retained).
 //!
 //! ABI versioning: exported names are additive; changing a signature
 //! bumps ZKML_ABI_VERSION (checked by the Python audit tool).
+//!   v1: attestor + proof_verify + transcript_seed
+//!   v2: witness session (create/begin_layer/record_op/end_layer/
+//!       finalize/destroy) — additive, v1 functions unchanged.
 
 const std = @import("std");
 const merkle = @import("merkle.zig");
 const transcript = @import("transcript.zig");
+const trace = @import("trace/root.zig");
 
-pub const ZKML_ABI_VERSION: u32 = 1;
+pub const ZKML_ABI_VERSION: u32 = 2;
 
 /// Status codes returned by the C API. Stable across versions.
 pub const Status = enum(i32) {
@@ -199,9 +203,9 @@ pub export fn zkml_proof_verify(
 
 // --- Deterministic transcript seed (F1) ---
 
-/// Derive a deterministic 32-byte sampling seed from a context (BLUE
-/// BLUE_PRINT §8: zkml_transcript_seed — reproducible sampling with no
-/// hidden state: same context → same seed, always).
+/// Derive a deterministic 32-byte sampling seed from a context
+/// (BLUE_PRINT §8: reproducible sampling with no hidden state: same
+/// context → same seed, always).
 pub export fn zkml_transcript_seed(
     context: ?[*]const u8,
     context_len: usize,
@@ -217,6 +221,114 @@ pub export fn zkml_transcript_seed(
     return @intFromEnum(Status.ok);
 }
 
+// --- Witness session (ABI v2 — recorded inference feed) ---
+
+/// Slot key as seen from C: flat mirror of `trace.SlotKey`.
+/// `op` is the `trace.Op` ordinal (see ZKML_OP_* in zkml_c.h).
+/// Field order matches the C struct exactly: 8 bytes, no padding.
+pub const ZKML_SlotKey = extern struct {
+    layer: u32,
+    expert: u16,
+    op: u8,
+    rank: u8,
+};
+
+/// Witness session handle. Wraps `TraceRecorder` + layer state machine:
+/// open layer (begin) → record* → close layer (end) → finalize (frozen).
+pub const ZKML_Witness = struct {
+    allocator: std.mem.Allocator,
+    recorder: trace.TraceRecorder,
+    /// Layer opened by begin_layer and not yet closed (record target).
+    open_layer: ?u32 = null,
+    /// Set by finalize: no further begin/record/end accepted.
+    frozen: bool = false,
+};
+
+/// Create a witness session. `allocator` is captured (B1), same rule as
+/// the attestor. Returns NULL on allocation failure.
+pub export fn zkml_witness_session_create(allocator: *anyopaque) ?*ZKML_Witness {
+    const a: *std.mem.Allocator = @ptrCast(@alignCast(allocator));
+    const self = a.create(ZKML_Witness) catch return null;
+    self.* = .{
+        .allocator = a.*,
+        .recorder = trace.TraceRecorder.init(a.*),
+    };
+    return self;
+}
+
+/// Open layer `layer_idx` for recording. Only one layer may be open at a
+/// time; call end_layer before opening the next. Rejected after finalize.
+pub export fn zkml_witness_begin_layer(self: *ZKML_Witness, layer_idx: u32) i32 {
+    if (self.frozen) return @intFromEnum(Status.invalid_argument);
+    if (self.open_layer != null) return @intFromEnum(Status.invalid_argument);
+    self.open_layer = layer_idx;
+    return @intFromEnum(Status.ok);
+}
+
+/// Record one op payload into slot `key`. May be called concurrently from
+/// multiple threads while a layer is open (TraceRecorder is thread-safe);
+/// the engine serializes begin/end/finalize itself. `key.layer` must
+/// match the open layer. `payload` is copied, never retained.
+pub export fn zkml_witness_record_op(
+    self: *ZKML_Witness,
+    key: ?*const ZKML_SlotKey,
+    payload: ?[*]const u8,
+    payload_len: usize,
+) i32 {
+    const k = key orelse return @intFromEnum(Status.invalid_argument);
+    const p = payload orelse return @intFromEnum(Status.invalid_argument);
+    if (self.frozen) return @intFromEnum(Status.invalid_argument);
+    const open = self.open_layer orelse return @intFromEnum(Status.invalid_argument);
+    if (k.layer != open) return @intFromEnum(Status.invalid_argument);
+    if (k.op >= @intFromEnum(trace.Op.other) + 1) return @intFromEnum(Status.invalid_argument);
+    const slot_key = trace.SlotKey{
+        .layer = k.layer,
+        .op = @enumFromInt(k.op),
+        .expert = k.expert,
+        .rank = k.rank,
+    };
+    self.recorder.record(slot_key, p[0..payload_len]) catch |err| {
+        return @intFromEnum(Status.of(err));
+    };
+    return @intFromEnum(Status.ok);
+}
+
+/// Close the currently open layer. Must pair with begin_layer.
+pub export fn zkml_witness_end_layer(self: *ZKML_Witness) i32 {
+    if (self.frozen) return @intFromEnum(Status.invalid_argument);
+    if (self.open_layer == null) return @intFromEnum(Status.invalid_argument);
+    self.open_layer = null;
+    return @intFromEnum(Status.ok);
+}
+
+/// Finalize: absorb all recorded slots in CANONICAL order (BLUE_PRINT
+/// §6.2) bound to `stmt_hash`, writing the 32-byte trace hash to
+/// `trace_hash_out`. Freezes the session (no further recording).
+pub export fn zkml_witness_finalize(
+    self: *ZKML_Witness,
+    stmt_hash: ?[*]const u8,
+    trace_hash_out: ?[*]u8,
+) i32 {
+    const s = stmt_hash orelse return @intFromEnum(Status.invalid_argument);
+    const out = trace_hash_out orelse return @intFromEnum(Status.invalid_argument);
+    if (self.frozen) return @intFromEnum(Status.invalid_argument);
+    if (self.open_layer != null) return @intFromEnum(Status.invalid_argument);
+    const h = self.recorder.finalize(s[0..32]) catch |err| {
+        return @intFromEnum(Status.of(err));
+    };
+    @memcpy(out[0..32], &h);
+    self.frozen = true;
+    return @intFromEnum(Status.ok);
+}
+
+/// Destroy the session: frees all slot buffers and the handle (B1).
+/// Safe on partially-used sessions; destroy(NULL) is a no-op.
+pub export fn zkml_witness_session_destroy(self: ?*ZKML_Witness) void {
+    const w = self orelse return;
+    w.recorder.deinit();
+    w.allocator.destroy(w);
+}
+
 comptime {
     // Force emission (BLUE_PRINT §8: comptime { _ = &fn } verified with nm).
     _ = &zkml_attestor_create;
@@ -228,6 +340,12 @@ comptime {
     _ = &zkml_attestor_destroy;
     _ = &zkml_proof_verify;
     _ = &zkml_transcript_seed;
+    _ = &zkml_witness_session_create;
+    _ = &zkml_witness_begin_layer;
+    _ = &zkml_witness_record_op;
+    _ = &zkml_witness_end_layer;
+    _ = &zkml_witness_finalize;
+    _ = &zkml_witness_session_destroy;
 }
 
 // --- Tests: exercise the ABI exactly as C would (F0 go/no-go §13) ---
@@ -342,4 +460,104 @@ test "abi: duplicate names rejected at finish" {
     // -5 = duplicate_name; builder state stays valid for destroy.
     try testing.expectEqual(@as(i32, -5), zkml_attestor_finish(h));
     zkml_attestor_destroy(h);
+}
+
+test "abi: witness session lifecycle and determinism" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var a = arena.allocator();
+
+    const w = zkml_witness_session_create(@ptrCast(&a)) orelse return error.TestUnexpectedResult;
+
+    const stmt = [_]u8{0x77} ** 32;
+    const k0 = ZKML_SlotKey{ .layer = 0, .expert = 3, .op = @intFromEnum(trace.Op.gemm_a), .rank = 0 };
+    const k1 = ZKML_SlotKey{ .layer = 1, .expert = 0, .op = @intFromEnum(trace.Op.gemm_c), .rank = 1 };
+
+    try testing.expectEqual(@as(i32, 0), zkml_witness_begin_layer(w, 0));
+    try testing.expectEqual(@as(i32, 0), zkml_witness_record_op(w, &k0, "AAAA", 4));
+    try testing.expectEqual(@as(i32, 0), zkml_witness_record_op(w, &k0, "BBBB", 4));
+    try testing.expectEqual(@as(i32, 0), zkml_witness_end_layer(w));
+    try testing.expectEqual(@as(i32, 0), zkml_witness_begin_layer(w, 1));
+    try testing.expectEqual(@as(i32, 0), zkml_witness_record_op(w, &k1, "CCCC", 4));
+    try testing.expectEqual(@as(i32, 0), zkml_witness_end_layer(w));
+
+    var h1: [32]u8 = undefined;
+    try testing.expectEqual(@as(i32, 0), zkml_witness_finalize(w, &stmt, &h1));
+
+    // Frozen after finalize.
+    try testing.expectEqual(@as(i32, -2), zkml_witness_begin_layer(w, 2));
+    try testing.expectEqual(@as(i32, -2), zkml_witness_record_op(w, &k0, "X", 1));
+    try testing.expectEqual(@as(i32, -2), zkml_witness_end_layer(w));
+    try testing.expectEqual(@as(i32, -2), zkml_witness_finalize(w, &stmt, &h1));
+    zkml_witness_session_destroy(w);
+
+    // Same data in a second session (different insertion order) → same hash.
+    const w2 = zkml_witness_session_create(@ptrCast(&a)) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(i32, 0), zkml_witness_begin_layer(w2, 1));
+    try testing.expectEqual(@as(i32, 0), zkml_witness_record_op(w2, &k1, "CCCC", 4));
+    try testing.expectEqual(@as(i32, 0), zkml_witness_end_layer(w2));
+    try testing.expectEqual(@as(i32, 0), zkml_witness_begin_layer(w2, 0));
+    try testing.expectEqual(@as(i32, 0), zkml_witness_record_op(w2, &k0, "AAAA", 4));
+    try testing.expectEqual(@as(i32, 0), zkml_witness_record_op(w2, &k0, "BBBB", 4));
+    try testing.expectEqual(@as(i32, 0), zkml_witness_end_layer(w2));
+    var h2: [32]u8 = undefined;
+    try testing.expectEqual(@as(i32, 0), zkml_witness_finalize(w2, &stmt, &h2));
+    zkml_witness_session_destroy(w2);
+    try testing.expectEqualSlices(u8, &h1, &h2);
+
+    // Different payload → different hash.
+    const w3 = zkml_witness_session_create(@ptrCast(&a)) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(i32, 0), zkml_witness_begin_layer(w3, 0));
+    try testing.expectEqual(@as(i32, 0), zkml_witness_record_op(w3, &k0, "AAAB", 4));
+    try testing.expectEqual(@as(i32, 0), zkml_witness_end_layer(w3));
+    var h3: [32]u8 = undefined;
+    try testing.expectEqual(@as(i32, 0), zkml_witness_finalize(w3, &stmt, &h3));
+    zkml_witness_session_destroy(w3);
+    try testing.expect(!std.mem.eql(u8, &h1, &h3));
+}
+
+test "abi: witness state machine negatives" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var a = arena.allocator();
+
+    // C-layout sanity: ZKML_SlotKey must match zkml_c.h (8 bytes).
+    try testing.expectEqual(@as(usize, 8), @sizeOf(ZKML_SlotKey));
+    try testing.expectEqual(@as(usize, 0), @offsetOf(ZKML_SlotKey, "layer"));
+    try testing.expectEqual(@as(usize, 4), @offsetOf(ZKML_SlotKey, "expert"));
+    try testing.expectEqual(@as(usize, 6), @offsetOf(ZKML_SlotKey, "op"));
+    try testing.expectEqual(@as(usize, 7), @offsetOf(ZKML_SlotKey, "rank"));
+
+    const w = zkml_witness_session_create(@ptrCast(&a)) orelse return error.TestUnexpectedResult;
+    defer zkml_witness_session_destroy(w);
+
+    const stmt = [_]u8{1} ** 32;
+    var out: [32]u8 = undefined;
+    const k = ZKML_SlotKey{ .layer = 0, .expert = 0, .op = 0, .rank = 0 };
+
+    // record with no open layer.
+    try testing.expectEqual(@as(i32, -2), zkml_witness_record_op(w, &k, "x", 1));
+    // end with no open layer.
+    try testing.expectEqual(@as(i32, -2), zkml_witness_end_layer(w));
+    // double begin.
+    try testing.expectEqual(@as(i32, 0), zkml_witness_begin_layer(w, 0));
+    try testing.expectEqual(@as(i32, -2), zkml_witness_begin_layer(w, 1));
+    // record for a different layer than open.
+    const k_wrong = ZKML_SlotKey{ .layer = 5, .expert = 0, .op = 0, .rank = 0 };
+    try testing.expectEqual(@as(i32, -2), zkml_witness_record_op(w, &k_wrong, "x", 1));
+    // invalid op ordinal.
+    const k_bop = ZKML_SlotKey{ .layer = 0, .expert = 0, .op = 200, .rank = 0 };
+    try testing.expectEqual(@as(i32, -2), zkml_witness_record_op(w, &k_bop, "x", 1));
+    // null args.
+    try testing.expectEqual(@as(i32, -2), zkml_witness_record_op(w, null, "x", 1));
+    try testing.expectEqual(@as(i32, -2), zkml_witness_record_op(w, &k, null, 1));
+    // finalize with layer still open.
+    try testing.expectEqual(@as(i32, -2), zkml_witness_finalize(w, &stmt, &out));
+    // close the layer so finalize is unblocked.
+    try testing.expectEqual(@as(i32, 0), zkml_witness_end_layer(w));
+    // finalize with null args.
+    try testing.expectEqual(@as(i32, -2), zkml_witness_finalize(w, null, &out));
+    try testing.expectEqual(@as(i32, -2), zkml_witness_finalize(w, &stmt, null));
+    // happy path now works.
+    try testing.expectEqual(@as(i32, 0), zkml_witness_finalize(w, &stmt, &out));
 }

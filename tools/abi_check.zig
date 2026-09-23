@@ -121,13 +121,42 @@ pub fn main(init: std.process.Init) !void {
 
     var root_buf: [64]u8 = undefined;
     const root_hex = try std.fmt.bufPrint(&root_buf, "{x}", .{root});
+
+    // --- Witness path (ABI v2): record a small session end-to-end ---
+    const witness = api.api.zkml_witness_session_create(@ptrCast(&allocator)) orelse {
+        std.debug.print("witness_session_create failed\n", .{});
+        return error.WitnessCreate;
+    };
+    defer api.api.zkml_witness_session_destroy(witness);
+
+    const slot = api.api.ZKML_SlotKey{
+        .layer = 0,
+        .expert = 0,
+        .op = @intFromEnum(api.trace.Op.gemm_a),
+        .rank = 0,
+    };
+    if (api.api.zkml_witness_begin_layer(witness, 0) != 0) return error.WitnessBegin;
+    if (api.api.zkml_witness_record_op(witness, &slot, "GEMM-OUT-ROWS-0", 15) != 0) return error.WitnessRecord;
+    if (api.api.zkml_witness_end_layer(witness) != 0) return error.WitnessEnd;
+    var trace_hash: [32]u8 = undefined;
+    if (api.api.zkml_witness_finalize(witness, &root, &trace_hash) != 0) return error.WitnessFinalize;
+    var trace_buf: [64]u8 = undefined;
+    const trace_hex = try std.fmt.bufPrint(&trace_buf, "{x}", .{trace_hash});
+
     {
-        var obuf: [512]u8 = undefined;
-        var w = std.Io.File.stdout().writer(io, &obuf);
-        try w.interface.print(
-            "abi check OK\n  root:  {s}\n  proof: {d} bytes for '{s}'\n  self-verify: passed\n  artifacts in {s}/ for tools/verify_weights.py\n",
-            .{ root_hex, wire_len, proof_name, outdir },
-        );
-        try w.interface.flush();
+        const f = try out.createFile(io, "trace.hex", .{});
+        var fw = f.writer(io, &fbuf);
+        try fw.interface.writeAll(trace_hex);
+        try fw.interface.writeAll("\n");
+        try fw.interface.flush();
+        f.close(io);
     }
+
+    var obuf: [512]u8 = undefined;
+    var w = std.Io.File.stdout().writer(io, &obuf);
+    try w.interface.print(
+        "abi check OK\n  root:  {s}\n  proof: {d} bytes for '{s}'\n  trace: {s}\n  self-verify: passed\n  artifacts in {s}/ for tools/verify_weights.py\n",
+        .{ root_hex, wire_len, proof_name, trace_hex, outdir },
+    );
+    try w.interface.flush();
 }

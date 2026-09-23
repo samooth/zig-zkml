@@ -58,25 +58,33 @@ typedef int (*zkml_weight_stream_fn)(
 
 /*
  * ---------------------------------------------------------------------------
- * Witness stream (recorded inference — feeds TraceRecorder)
+ * Witness stream (recorded inference — feeds TraceRecorder, ABI v2)
  * ---------------------------------------------------------------------------
- * Lifecycle (forward path, ABI v2 — declared in zkml_c.h in Stage 5):
+ * Lifecycle (forward path — declared in zkml_c.h):
  *
- *   int s = zkml_witness_session_create(allocator);
+ *   ZKML_Witness* w = zkml_witness_session_create(allocator);
  *   for each layer L executed by the engine:
- *       zkml_witness_begin_layer(s, layer_idx, ...);
- *       for each recorded op (gemm_a/b/c, dequant, routing, ...):
- *           zkml_witness_record_op(s, &slot_key, payload, payload_len);
- *       zkml_witness_end_layer(s, trace_hash_out);
- *   zkml_witness_finalize(s, witness_id_out);
+ *       zkml_witness_begin_layer(w, layer_idx);
+ *       for each recorded op (gemm_a/b/c, dequant, routing, ...)   // may
+ *           zkml_witness_record_op(w, &slot_key, payload, len);    // be
+ *       zkml_witness_end_layer(w);                                 // MT
+ *   zkml_witness_finalize(w, stmt_hash, trace_hash_out);
+ *   zkml_witness_session_destroy(w);
  *
- * SlotKey (flat, C-layout): layer u32, op enum, expert u16 (0 for dense),
- * tp_rank u8 — mirrors TraceRecorder's canonical ordering. Payload is the
- * raw op I/O bytes the engine's recorded-mode kernel produced.
+ * SlotKey (ZKML_SlotKey, C-layout, 8 bytes): layer u32, expert u16
+ * (0 for dense), op u8 (ZKML_OP_*), rank u8 — field order is
+ * alignment-packed to match libs/api.zig exactly. Payload is the raw
+ * op I/O bytes the engine's recorded-mode kernel produced (copied, never
+ * retained).
  *
  * Contract:
+ *   - One layer open at a time; key->layer must match the open layer.
+ *   - record_op may run concurrently between begin/end (TraceRecorder is
+ *     thread-safe); begin/end/finalize are serialized by the engine.
  *   - Intra-slot order is semantically significant (same thread/expert);
  *     inter-slot order is canonicalized at finalize (BLUE_PRINT §6.2).
+ *   - finalize freezes the session; stmt_hash binds the trace to the
+ *     statement (public inputs).
  *   - Engines with no MoE concept pass expert = 0, rank = 0.
  *   - Witness hooks are opt-in: F0 (attestation-only) adapters skip this
  *     whole section.
