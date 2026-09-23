@@ -159,22 +159,27 @@ pub const BindError = error{ OutOfMemory, NibbleOutOfRange, InconsistentOperands
 
 /// Extend a GEMM trace with the quantization columns.
 ///
-/// `nib_a` / `nib_b` hold one raw Q4_K nibble (0..15) per MAC; the block
-/// scales are given as the engine's q4.22 Goldilocks values. The GEMM
-/// operand columns must then equal `(nibble - 8) * scale` exactly, or the
+/// `nib_a` / `nib_b` hold one raw Q4_K nibble (0..15) per MAC, and
+/// `scale_a` / `scale_b` one block scale PER MAC — a reduction that spans
+/// several 256-element Q4_K blocks has a different scale in each, so a
+/// single scalar would refuse honest multi-block witnesses. The GEMM
+/// operand columns must equal `(nibble - 8) * scale` exactly, or the
 /// trace is not a dequantization of anything and is refused here (the AIR
 /// would reject it too, but later and less legibly).
 pub fn bindOperands(
     allocator: std.mem.Allocator,
     gemm_trace: *const gemm_air.Trace,
     nib_a: []const u8,
-    scale_a: Goldilocks,
+    scale_a: []const Goldilocks,
     nib_b: []const u8,
-    scale_b: Goldilocks,
+    scale_b: []const Goldilocks,
 ) BindError!Trace {
     const rows = gemm_trace.rows;
     const real = gemm_air.realRowsFor(nib_a.len);
-    if (nib_b.len != nib_a.len or real + 1 > rows) return BindError.InconsistentOperands;
+    if (nib_b.len != nib_a.len or scale_a.len != nib_a.len or scale_b.len != nib_a.len) {
+        return BindError.InconsistentOperands;
+    }
+    if (real + 1 > rows) return BindError.InconsistentOperands;
 
     const cols = try allocator.alloc([]Fp2, column_count);
     errdefer allocator.free(cols);
@@ -202,13 +207,13 @@ pub fn bindOperands(
             cols[col_bits_b + bit][r] = Fp2.re(Goldilocks.fromU64((nib_b_row >> shift) & 1));
         }
 
-        // Scales: real rows use the block scale, padding rows zero, and the
-        // closing row (nibble 9) derives the scale from the synthetic
-        // operand so (9 - 8) * scale reproduces it.
+        // Scales: real rows use their block's scale, padding rows zero,
+        // and the closing row (nibble 9) derives the scale from the
+        // synthetic operand so (9 - 8) * scale reproduces it.
         const a_val = gemm_trace.columns[gemm_air.col_a][r].a;
         const b_val = gemm_trace.columns[gemm_air.col_b][r].a;
-        const scale_a_row: Goldilocks = if (r < real) scale_a else if (r == rows - 1) a_val else Goldilocks.zero;
-        const scale_b_row: Goldilocks = if (r < real) scale_b else if (r == rows - 1) b_val else Goldilocks.zero;
+        const scale_a_row: Goldilocks = if (r < real) scale_a[r] else if (r == rows - 1) a_val else Goldilocks.zero;
+        const scale_b_row: Goldilocks = if (r < real) scale_b[r] else if (r == rows - 1) b_val else Goldilocks.zero;
         cols[col_scale_a][r] = Fp2.re(scale_a_row);
         cols[col_scale_b][r] = Fp2.re(scale_b_row);
 

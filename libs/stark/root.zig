@@ -45,7 +45,7 @@ const fp2 = @import("../fri/fp2.zig");
 const fri = @import("../fri/root.zig");
 const domain_lib = @import("../fri/domain.zig");
 const transcript_lib = @import("../transcript.zig");
-const fft = @import("fft.zig");
+const fft = @import("../fri/fft.zig");
 const expr = @import("expr.zig");
 const commit_lib = @import("commit.zig");
 

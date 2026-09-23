@@ -164,6 +164,37 @@ pub fn build(b: *std.Build) void {
     const spike_step = b.step("spike", "F2 spikes: FRI soundness audit over Goldilocks");
     spike_step.dependOn(&run_fri_audit.step);
 
+    // --- F2 bench ---------------------------------------------------------
+    // bench/gemm_bench.zig measures the prover/verifier cost of the two
+    // trace layouts. It gets its OWN ReleaseFast module rather than
+    // reusing lib_mod: sharing it would compile the library with whatever
+    // -Doptimize the caller passed (Debug by default) and the numbers
+    // would describe the wrong build.
+    const bench_lib_mod = b.createModule(.{
+        .root_source_file = b.path("zkml.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .imports = &.{
+            .{ .name = "zig-merkle", .module = zmerkle_mod },
+        },
+    });
+    const bench_mod = b.createModule(.{
+        .root_source_file = b.path("bench/gemm_bench.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .imports = &.{
+            .{ .name = "zkml", .module = bench_lib_mod },
+        },
+    });
+    const bench_exe = b.addExecutable(.{
+        .name = "zkml_gemm_bench",
+        .root_module = bench_mod,
+    });
+    const run_bench = b.addRunArtifact(bench_exe);
+    if (b.args) |bench_args| run_bench.addArgs(bench_args);
+    const bench_step = b.step("bench", "F2 bench: prover/verifier cost per GEMM layout (ReleaseFast)");
+    bench_step.dependOn(&run_bench.step);
+
     // --- Stage 4: ktransformers-zig reference glue (optional) ------------
     // Same shape as the llama adapter: CMake configure/build, gated test,
     // independent Python audit of the emitted root. Needs a built

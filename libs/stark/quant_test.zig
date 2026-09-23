@@ -56,8 +56,8 @@ const Case = struct {
     b: []Goldilocks,
     nib_a: [k_macs]u8,
     nib_b: [k_macs]u8,
-    scale_a: Goldilocks,
-    scale_b: Goldilocks,
+    scale_a: [k_macs]Goldilocks,
+    scale_b: [k_macs]Goldilocks,
     c_true: Goldilocks,
 
     fn deinit(self: *Case, allocator: std.mem.Allocator) void {
@@ -83,8 +83,8 @@ fn realCase(allocator: std.mem.Allocator) !Case {
         .b = b,
         .nib_a = undefined,
         .nib_b = undefined,
-        .scale_a = Goldilocks.fromU64(tensor.fp16ToFixedQ4_22(0x3C00) catch unreachable),
-        .scale_b = Goldilocks.fromU64(tensor.fp16ToFixedQ4_22(0x3800) catch unreachable),
+        .scale_a = undefined,
+        .scale_b = undefined,
         .c_true = Goldilocks.zero,
     };
     for (0..k_macs) |i| {
@@ -92,6 +92,8 @@ fn realCase(allocator: std.mem.Allocator) !Case {
         b[i] = deq_b[i];
         case.nib_a[i] = rawNibble(i);
         case.nib_b[i] = rawNibble(i);
+        case.scale_a[i] = Goldilocks.fromU64(tensor.fp16ToFixedQ4_22(0x3C00) catch unreachable);
+        case.scale_b[i] = Goldilocks.fromU64(tensor.fp16ToFixedQ4_22(0x3800) catch unreachable);
         case.c_true = case.c_true.add(a[i].mul(b[i]));
     }
     return case;
@@ -104,9 +106,9 @@ fn boundTrace(allocator: std.mem.Allocator, case: *const Case) !struct { gemm: g
         allocator,
         &gemm,
         &case.nib_a,
-        case.scale_a,
+        &case.scale_a,
         &case.nib_b,
-        case.scale_b,
+        &case.scale_b,
     );
     return .{ .gemm = gemm, .bound = bound };
 }
@@ -209,7 +211,7 @@ test "quant: a raw nibble outside [0, 15] is refused before proving" {
     bad[2] = 16;
     try testing.expectError(
         quant.BindError.NibbleOutOfRange,
-        quant.bindOperands(a, &gemm, &bad, case.scale_a, &case.nib_b, case.scale_b),
+        quant.bindOperands(a, &gemm, &bad, &case.scale_a, &case.nib_b, &case.scale_b),
     );
 }
 
@@ -223,10 +225,11 @@ test "quant: operands that are not the dequantization of their nibble are refuse
     var gemm = try gemm_air.buildTrace(a, case.a, case.b, case.c_true);
     defer gemm.deinit(a);
 
-    const wrong = case.scale_a.add(Goldilocks.one);
+    var wrong: [k_macs]Goldilocks = undefined;
+    for (0..k_macs) |i| wrong[i] = case.scale_a[i].add(Goldilocks.one);
     try testing.expectError(
         quant.BindError.InconsistentOperands,
-        quant.bindOperands(a, &gemm, &case.nib_a, wrong, &case.nib_b, case.scale_b),
+        quant.bindOperands(a, &gemm, &case.nib_a, &wrong, &case.nib_b, &case.scale_b),
     );
 }
 
@@ -251,8 +254,8 @@ test "quant: KNOWN GAP — a fabricated scale still proves (no scale lookup yet)
         .b = operands_b,
         .nib_a = undefined,
         .nib_b = undefined,
-        .scale_a = fake,
-        .scale_b = fake,
+        .scale_a = undefined,
+        .scale_b = undefined,
         .c_true = Goldilocks.zero,
     };
     const eight = Goldilocks.fromU64(8);
@@ -261,6 +264,8 @@ test "quant: KNOWN GAP — a fabricated scale still proves (no scale lookup yet)
         const nb = na;
         case.nib_a[i] = rawNibble(i);
         case.nib_b[i] = rawNibble(i);
+        case.scale_a[i] = fake;
+        case.scale_b[i] = fake;
         case.a[i] = na.sub(eight).mul(fake);
         case.b[i] = nb.sub(eight).mul(fake);
         case.c_true = case.c_true.add(case.a[i].mul(case.b[i]));
@@ -279,4 +284,73 @@ test "quant: KNOWN GAP — a fabricated scale still proves (no scale lookup yet)
 
     var vt = stark.Transcript.init("zkml.quant.v1");
     try testing.expect(try stark.verify(&vt, &proof, sys.system(), CONFIG));
+}
+
+test "quant: a 4096-MAC reduction (8192 rows) proves and verifies" {
+    // Regression: fri.verify used to carry a fixed [4096]Fp2 stack buffer
+    // for the residual, so any proof whose final FRI domain exceeded 2^12
+    // was rejected as InvalidProof — an HONEST proof, silently. k=4096
+    // puts the final domain at 2^14. The residual is now evaluated with
+    // the FFT, so this both passes and stops dominating verify time.
+    const a = testing.allocator;
+    const k: usize = 4096;
+    var sys = try quant.buildSystem(a);
+    defer sys.deinit();
+
+    const av = try a.alloc(Goldilocks, k);
+    defer a.free(av);
+    const bv = try a.alloc(Goldilocks, k);
+    defer a.free(bv);
+    const nibs_a = try a.alloc(u8, k);
+    defer a.free(nibs_a);
+    const nibs_b = try a.alloc(u8, k);
+    defer a.free(nibs_b);
+    const sc_a = try a.alloc(Goldilocks, k);
+    defer a.free(sc_a);
+    const sc_b = try a.alloc(Goldilocks, k);
+    defer a.free(sc_b);
+
+    // Four Q4_K blocks, all sharing the fp16 scale 1.0, so the reduction
+    // spans several blocks and the per-MAC scale array is exercised.
+    const block = blockWithRamp();
+    const deq = tensor.dequantQ4K(&block, 0x3C00) catch unreachable;
+    const scale = Goldilocks.fromU64(tensor.fp16ToFixedQ4_22(0x3C00) catch unreachable);
+    var c = Goldilocks.zero;
+    for (0..k) |i| {
+        av[i] = deq[i % 256];
+        bv[i] = deq[i % 256];
+        nibs_a[i] = rawNibble(i % 256);
+        nibs_b[i] = rawNibble(i % 256);
+        sc_a[i] = scale;
+        sc_b[i] = scale;
+        c = c.add(av[i].mul(bv[i]));
+    }
+
+    var gemm = try gemm_air.buildTrace(a, av, bv, c);
+    defer gemm.deinit(a);
+    var bound = try quant.bindOperands(a, &gemm, nibs_a, sc_a, nibs_b, sc_b);
+    defer bound.deinit(a);
+    try testing.expectEqual(@as(usize, 8192), bound.rows);
+
+    const log_trace: u6 = 13;
+    const cfg: stark.Config = .{
+        .log_trace = log_trace,
+        .log_blowup = 2,
+        .fri = .{
+            .log_domain = log_trace + 2,
+            .log_final = log_trace + 1,
+            .log_residual_degree = log_trace,
+            .num_queries = 4,
+        },
+    };
+
+    var pt = stark.Transcript.init("zkml.quant.big.v1");
+    var proof = try stark.prove(a, &pt, .{
+        .rows = bound.rows,
+        .columns = bound.columns,
+    }, sys.system(), cfg);
+    defer proof.deinit(a);
+
+    var vt = stark.Transcript.init("zkml.quant.big.v1");
+    try testing.expect(try stark.verify(&vt, &proof, sys.system(), cfg));
 }

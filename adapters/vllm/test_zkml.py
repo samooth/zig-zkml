@@ -295,12 +295,16 @@ def test_safetensors_attestation_if_available():
     """Exercise the real shard path when safetensors is installed."""
     from zkml_vllm import model_loader
 
+    # Both failure modes mean "the optional dependency is unusable here",
+    # not "the code is wrong": ImportError when it is absent, OSError from
+    # the dynamic loader when the install is incomplete (a torch missing
+    # its libtorch_global_deps.so raises exactly that).
     try:
         import safetensors.torch
-    except ImportError:
-        print("    (skipped: safetensors not installed)")
+        import torch
+    except (ImportError, OSError) as exc:
+        print(f"    (skipped: safetensors/torch unusable: {exc})")
         return
-    import torch
 
     with tempfile.TemporaryDirectory() as tmp:
         shard = Path(tmp) / "model.safetensors"

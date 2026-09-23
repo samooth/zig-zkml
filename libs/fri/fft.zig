@@ -11,13 +11,18 @@
 //! and undone internally), matching libs/fri/domain.zig `Domain.at(i) =
 //! step_gen^i` — so an evaluation vector can be handed straight to FRI.
 //!
+//! It lives here, not under libs/stark, because FRI needs it too: the
+//! final-layer interpolation used to be a naive O(m^3) Vandermonde solve,
+//! which made proving a 512-row trace take 15 seconds. Both sides now
+//! share this transform.
+//!
 //! NOTE: this replaces the `libs/ntt.zig` spike, whose inverse applied the
 //! conjugate twice (a no-op) and whose test never exercised the inverse
 //! path. It was not compiled by any test target.
 
 const std = @import("std");
-const fp2 = @import("../fri/fp2.zig");
-const domain = @import("../fri/domain.zig");
+const fp2 = @import("fp2.zig");
+const domain = @import("domain.zig");
 
 pub const Fp2 = fp2.Fp2;
 pub const Goldilocks = fp2.Goldilocks;

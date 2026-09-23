@@ -25,6 +25,15 @@ pub const gadgets = @import("libs/gadgets/root.zig");
 pub const compile = @import("libs/compile/root.zig");
 pub const prove = @import("libs/prove/root.zig");
 
+// F2 STARK backend. Exported so tools (bench/gemm_bench.zig) and the F3
+// C API can reach the real prover without reaching into libs/ by path.
+pub const stark = @import("libs/stark/root.zig");
+pub const gemm_air = @import("libs/stark/gemm_air.zig");
+pub const gemm_chunk = @import("libs/stark/gemm_chunk.zig");
+pub const quant_binding = @import("libs/stark/quant_binding.zig");
+pub const chunk_binding = @import("libs/stark/chunk_binding.zig");
+pub const logup = @import("libs/stark/logup.zig");
+
 comptime {
     // Lazy-analysis trap: re-exported decls are not analyzed until referenced.
     // Force emission of the module API so unit tests and consumers see it.

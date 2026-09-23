@@ -29,6 +29,7 @@ const std = @import("std");
 const fp2 = @import("fp2.zig");
 const domain = @import("domain.zig");
 const merkle_pkg = @import("zig-merkle");
+const fft = @import("fft.zig");
 
 /// Blake3 adapter for zig-merkle's `H.hashBytes` node-hash interface.
 const NodeHash = struct {
@@ -98,6 +99,13 @@ pub const Error = error{
     InvalidParameters,
     InvalidProof,
 };
+
+/// Resource bound on the final FRI domain, i.e. on the scratch buffer the
+/// verifier allocates to evaluate the residual. 2^20 points is 16 MiB of
+/// F_{p^2}; beyond that a proof is refused rather than allocated. The
+/// config comes from the verifier's own code, so this is a guard against
+/// absurd local configurations, not a prover-controlled input.
+pub const max_final_domain: usize = 1 << 20;
 
 /// One committed layer (verifier view).
 pub const LayerCommit = struct {
@@ -280,60 +288,21 @@ pub const halves_inv_g = blk: {
 };
 const halves_inv = (fp2.Goldilocks.p + 1) / 2;
 
-/// Naive O(n^2) interpolation on the final (tiny) domain: returns
-/// coefficients c_0..c_{m-1} of the unique poly of degree < m matching
-/// the values at the natural points H_{log_final}[i]. Small final
-/// sizes (16-256) keep this cheap.
+/// Interpolate the final layer's natural-order evaluations into
+/// coefficients.
+///
+/// This used to solve the Vandermonde system V·c = v by Gaussian
+/// elimination: O(m^3) field operations with m = 2^log_final, which for a
+/// 512-row trace meant m = 1024 and ~15 seconds of proving for a single
+/// output element. The radix-2 inverse FFT over the same norm-1 torus does
+/// it in O(m log m) (libs/fri/fft.zig) and is the same transform the STARK
+/// prover already uses for its LDE, so the two can no longer disagree
+/// about layout conventions.
 fn interpolateToCoeffs(allocator: std.mem.Allocator, values: []const Fp2, log_final: u6) Error![]Fp2 {
-    const m = values.len; // == 2^log_final
     const dom = Domain.init(log_final);
-    // Solve the Vandermonde system V·c = v with V[i][j] = x_i^j.
-    const mat = try allocator.alloc(Fp2, m * (m + 1));
-    defer allocator.free(mat);
-    for (0..m) |i| {
-        const xi = dom.at(i);
-        var xp = Fp2.one;
-        for (0..m) |j| {
-            mat[i * (m + 1) + j] = xp;
-            xp = xp.mul(xi);
-        }
-        mat[i * (m + 1) + m] = values[i];
-    }
-    // Forward elimination + back substitution.
-    const coeffs = try allocator.alloc(Fp2, m);
+    const coeffs = try allocator.dupe(Fp2, values);
     errdefer allocator.free(coeffs);
-    for (0..m) |col| {
-        // pivot
-        var pivot: ?usize = null;
-        for (col..m) |r| {
-            if (!mat[r * (m + 1) + col].isZero()) {
-                pivot = r;
-                break;
-            }
-        }
-        const p = pivot orelse return Error.InvalidParameters;
-        if (p != col) {
-            for (0..(m + 1)) |c| {
-                const tmp = mat[col * (m + 1) + c];
-                mat[col * (m + 1) + c] = mat[p * (m + 1) + c];
-                mat[p * (m + 1) + c] = tmp;
-            }
-        }
-        // normalize row col
-        const inv = mat[col * (m + 1) + col].inv() catch return Error.InvalidParameters;
-        for (0..(m + 1)) |c| mat[col * (m + 1) + c] = mat[col * (m + 1) + c].mul(inv);
-        // eliminate below
-        for (0..m) |r| {
-            if (r == col) continue;
-            const f = mat[r * (m + 1) + col];
-            if (f.isZero()) continue;
-            for (0..(m + 1)) |c| {
-                const sub_v = mat[col * (m + 1) + c].mul(f);
-                mat[r * (m + 1) + c] = mat[r * (m + 1) + c].sub(sub_v);
-            }
-        }
-    }
-    for (0..m) |i| coeffs[i] = mat[i * (m + 1) + m];
+    fft.toCoefficients(coeffs, dom) catch return Error.InvalidParameters;
     return coeffs;
 }
 
@@ -436,20 +405,25 @@ pub fn verify(
     // The residual (2^log_residual_degree coefficients) is evaluated on
     // the FULL final domain (2^log_final points) — the domain is larger
     // than the degree bound (rate < 1 gives the soundness distance).
+    //
+    // Evaluated with the radix-2 FFT, not by Horner: Horner over
+    // (2^log_final points) x (2^log_residual_degree coefficients) is
+    // O(m·d) = O(m^2) and was already the verifier's dominant cost at
+    // 2^12 points (176 ms for a 1024-MAC proof). The buffer is heap
+    // allocated because it is config-sized; the cap below is a RESOURCE
+    // bound (the old fixed [4096]Fp2 stack buffer rejected any honest
+    // proof with log_final > 12, which is what made k=4096 fail), and
+    // the config is the verifier's own, never prover-supplied.
     const final_domain_size: usize = @as(usize, 1) << proof.log_final;
+    if (final_domain_size > max_final_domain) return Error.InvalidProof;
     const dom_final = Domain.init(proof.log_final);
-    var final_evals_buf: [4096]Fp2 = undefined;
-    if (final_domain_size > 4096) return Error.InvalidProof;
-    for (0..final_domain_size) |i| {
-        const xi = dom_final.at(i);
-        var acc = Fp2.zero;
-        var xp = Fp2.one;
-        for (proof.residual) |c| {
-            acc = acc.add(c.mul(xp));
-            xp = xp.mul(xi);
-        }
-        final_evals_buf[i] = acc;
-    }
+    const scratch = std.heap.page_allocator.alloc(Fp2, final_domain_size) catch
+        return Error.OutOfMemory;
+    defer std.heap.page_allocator.free(scratch);
+    @memset(scratch, Fp2.zero);
+    @memcpy(scratch[0..proof.residual.len], proof.residual);
+    fft.toEvaluations(scratch, dom_final) catch return Error.InvalidProof;
+    const final_evals = scratch;
 
     // ---------- queries ----------
     for (proof.queries) |*q| {
@@ -496,7 +470,7 @@ pub fn verify(
                 const even = x.add(negx).mulReal(halves_inv_g);
                 const odd = x.sub(negx).mul(xv.conj()).mulReal(halves_inv_g);
                 const expected = even.add(alphas[r].mul(odd));
-                if (!expected.eql(final_evals_buf[j])) return false;
+                if (!expected.eql(final_evals[j])) return false;
             }
             e = j; // next layer's element position
         }
