@@ -70,7 +70,9 @@ test {
     _ = @import("libs/stark/expr.zig");
     _ = @import("libs/stark/commit.zig");
     _ = @import("libs/stark/root.zig");
+    _ = @import("libs/stark/range.zig");
     _ = @import("libs/stark/gemm_air.zig");
+    _ = @import("libs/stark/quant_test.zig");
     _ = @import("libs/stark/gemm_test.zig");
     _ = @import("libs/fri/domain.zig");
     _ = @import("libs/fri/root.zig");
