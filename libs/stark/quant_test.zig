@@ -354,3 +354,53 @@ test "quant: a 4096-MAC reduction (8192 rows) proves and verifies" {
     var vt = stark.Transcript.init("zkml.quant.big.v1");
     try testing.expect(try stark.verify(&vt, &proof, sys.system(), cfg));
 }
+
+test "quant: no malformed fp16 can reach a provable witness" {
+    const a = testing.allocator;
+    var sys = try quant.buildSystem(a);
+    defer sys.deinit();
+
+    // Every one of these must fail at the fp16 seam. The point is not the
+    // error code but the ORDER: the conversion happens before the trace
+    // exists, so there is no witness to prove and nothing to reinterpret
+    // silently. 0x7C00 = +inf, 0xFC00 = -inf, 0x7E00 = NaN, 0x4C00 =
+    // 16.0 (>= 2^4), 0x0A00 = 2^-13 (inexact in q4.22), 0x00FF =
+    // subnormal, 0x0000 / 0x8000 = +/-0.
+    const malformed = [_]u16{ 0x7C00, 0xFC00, 0x7E00, 0xFE00, 0x4C00, 0xCC00, 0x0A00, 0x00FF, 0x0000, 0x8000 };
+    for (malformed) |bits| {
+        if (quant.scaleFromFp16(bits)) |v| {
+            _ = v;
+            return error.MalformedFp16WasAccepted;
+        } else |_| {}
+        // The dequantizer that reads real tensor bytes refuses the same
+        // patterns, so a GGUF with such a scale cannot be witnessed.
+        const block = blockWithRamp();
+        if (tensor.dequantQ4K(&block, bits)) |v| {
+            _ = v;
+            return error.MalformedFp16WasAccepted;
+        } else |_| {}
+    }
+
+    // And the positive control: a valid scale flows all the way through
+    // to a verifying proof, so the rejections above are not vacuous.
+    const ok_bits: u16 = 0x3C00;
+    const scale = try quant.scaleFromFp16(ok_bits);
+    var case = try realCase(a);
+    defer case.deinit(a);
+    try testing.expect(scale.eql(case.scale_a[0]));
+
+    var trace = try gemm_air.buildTrace(a, case.a, case.b, case.c_true);
+    defer trace.deinit(a);
+    var bound = try quant.bindOperands(a, &trace, &case.nib_a, &case.scale_a, &case.nib_b, &case.scale_b);
+    defer bound.deinit(a);
+
+    var pt = stark.Transcript.init("zkml.quant.v1");
+    var proof = try stark.prove(a, &pt, .{
+        .rows = bound.rows,
+        .columns = bound.columns,
+    }, sys.system(), CONFIG);
+    defer proof.deinit(a);
+
+    var vt = stark.Transcript.init("zkml.quant.v1");
+    try testing.expect(try stark.verify(&vt, &proof, sys.system(), CONFIG));
+}

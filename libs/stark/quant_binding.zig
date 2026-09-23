@@ -157,6 +157,19 @@ pub const Trace = struct {
 
 pub const BindError = error{ OutOfMemory, NibbleOutOfRange, InconsistentOperands };
 
+/// The seam where raw model bytes become a prover input.
+///
+/// `bindOperands` takes Goldilocks scales, so nothing downstream can tell
+/// a real fp16-derived scale from an arbitrary field element. Routing the
+/// conversion through one named function makes the reachable set
+/// explicit: it is exactly the image of `fp16ToFixedQ4_22` over VALID
+/// fp16 bit patterns, i.e. |scale| ∈ [2^-12, 2^4) with a finite value. The
+/// LogUp table that closes the KNOWN GAP must pin that same set — this
+/// function is its specification.
+pub fn scaleFromFp16(bits: u16) tensor.Fp16Error!Goldilocks {
+    return Goldilocks.fromU64(try tensor.fp16ToFixedQ4_22(bits));
+}
+
 /// Extend a GEMM trace with the quantization columns.
 ///
 /// `nib_a` / `nib_b` hold one raw Q4_K nibble (0..15) per MAC, and
