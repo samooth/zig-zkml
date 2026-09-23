@@ -144,23 +144,42 @@ verifica el root contra el auditor independiente.
 
 ---
 
-### Stage 2 — zig-ai direct module (más fácil — mismo lenguaje)
+### Stage 2 — zig-ai direct module (mismo lenguaje) — ✅ DONE
 
-**Layout:** `adapters/zig_ai/` — al ser ambos Zig, el "adapter" es mostly wiring
-doc + ejemplo + snippet de patch.
+**Layout:** `adapters/zig_ai/` — al ser ambos Zig 0.16.0, el "adapter" es
+wiring: import de módulo, sin FFI ni CMake.
+
+**Implementado:** `TensorSource` (interfaz estructural `count`/`name`/`data`)
++ `attestSource` → root, `ProofSession`, parser de nombres GGUF, y el bridge
+de witness sobre `MetricHooks`. 11 tests en el gate default (`zig build
+test` = 81/81). `integration.zig` contiene el glue compilable dentro de
+zig-ai (`GgufSnapshot` sobre `GgufFile`); los patches exactos para el repo
+hermano están en el README del adapter.
 
 | Archivo | Rol |
 |---|---|
-| `adapters/zig_ai/integration.zig` | Referencia: cómo el `build.zig` de zig-ai añade `b.dependency("zig_zkml", ...)` e importa `zig_zkml` |
-| `adapters/zig_ai/gguf_attestation.zig` | Wraps iteración de tensores en `src/loader/gguf.zig` / `gguf_model.zig`: tras cargar cada tensor → `zkml_attestor_add(name, bytes)` → `zkml_attestor_root` |
-| `adapters/zig_ai/witness_hooks.zig` | Mapea el contrato existente **`MetricHooks`** (`src/engine_api/contract.zig`) de zig-ai a `TraceRecorder`: `LayerMetrics` → `SlotKey{layer, op, ...}` |
-| `adapters/zig_ai/README.md` | Diffs/patch exactos para `build.zig` + loader de zig-ai (repo hermano — documentamos el patch, no lo editamos desde aquí) |
-| `adapters/zig_ai/test_adapter.zig` | Unit test: stream sintético de tensores → estabilidad de root bajo reorden |
+| `adapters/zig_ai/root.zig` | Raíz del módulo: re-exporta las piezas compiladas |
+| `adapters/zig_ai/gguf_attestation.zig` | `TensorSource` + `attestSource` (tabla de tensores → root Merkle), `ProofSession`, clasificación de nombres GGUF (`blk.N.*`, `mlp.*`, `feed_forward.*`) |
+| `adapters/zig_ai/witness_hooks.zig` | `Recorder` (estado del witness ABI) + bridge `MetricHooks.on_layer` (sesión `threadlocal`, porque el contrato no lleva userdata) |
+| `adapters/zig_ai/abi.zig` | Único punto de contacto con los punteros crudos del C ABI |
+| `adapters/zig_ai/integration.zig` | `GgufSnapshot` sobre `GgufFile.tensors` + `tensorData()` (mmap, zero-copy) — se compila **dentro** de zig-ai |
+| `adapters/zig_ai/README.md` | Patches exactos: `build.zig.zon` (dep path), módulo en `build.zig`, hook de attestation al cargar, hook de witness |
+| `adapters/zig_ai/test_adapter.zig` | Gate: orden-independencia, byte corrupto, duplicados, acuerdo con el core, proof round-trip, parseo de nombres, witness determinista y negativos de máquina de estados |
+| `build.zig` | Módulo de test propio para el adapter con import `zig_zkml` (así el engine lo consume igual: dependencia de path + módulo) |
 
-**Por qué funciona:** sin FFI, sin CMake; zig-ai ya tiene loader GGUF + hooks; su
-sistema de módulos es deps de `build.zig` — adición de 3 líneas.
+**Hallazgo que condiciona el diseño:** el build de zig-ai usa
+`b.createModule` y **nunca** `b.addModule`, así que no existe módulo
+exportado a nivel de paquete del que depender. De ahí la interfaz
+estructural `TensorSource` en vez de importar `gguf` desde aquí; el binding
+concreto (`GgufSnapshot`) vive en `integration.zig` y lo compila el engine.
 
-**Gate:** `zig build test` recolecta tests del adapter (añadir a imports de test de `zkml.zig`).
+**Bug real encontrado por estos tests (core):** `merkle.Builder.deinit`
+asignaba `.empty` a las `ArrayList` sin liberar su buffer (fuga en el path de
+nombres duplicados / attestor destruido a medio cargar). Corregido en
+`libs/merkle.zig`.
+
+**Gate:** `zig build test` recolecta los tests del adapter (11 tests, gate
+default verde: 81/81).
 
 **Commit:** `feat(adapters): zig-ai GGUF attestation + MetricHooks→TraceRecorder witness bridge`
 

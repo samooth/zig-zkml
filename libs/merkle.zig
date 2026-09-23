@@ -229,8 +229,11 @@ pub const Builder = struct {
     /// deinit cannot double-free (it sees empty slices).
     pub fn deinit(self: *Builder) void {
         for (self.names.items) |nm| self.allocator.free(nm);
-        self.names = .empty;
-        self.leaves = .empty;
+        // ArrayList.deinit frees the backing buffer and resets to .empty,
+        // which also keeps a stray second deinit harmless. Assigning
+        // `.empty` directly would silently drop the capacity and leak.
+        self.names.deinit(self.allocator);
+        self.leaves.deinit(self.allocator);
     }
 
     /// Hash one tensor into the tree as it streams past. `name` is duped

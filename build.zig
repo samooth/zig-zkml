@@ -49,6 +49,19 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
 
+    // Engine adapter tests: separate root module so the adapter sources can
+    // use `@import("zig_zkml")` — exactly how an engine build consumes them
+    // (a path dependency + module import), while still being gated here.
+    const zig_ai_adapter_mod = b.createModule(.{
+        .root_source_file = b.path("adapters/zig_ai/test_adapter.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    zig_ai_adapter_mod.addImport("zig_zkml", lib_mod);
+    const adapter_tests = b.addTest(.{ .root_module = zig_ai_adapter_mod });
+    const run_adapter_tests = b.addRunArtifact(adapter_tests);
+    test_step.dependOn(&run_adapter_tests.step);
+
     // ABI check: exercise the exported C API end-to-end (attestor
     // lifecycle, proof, standalone verify, artifact dump for the Python
     // cross-check). Also assert the symbols really landed in the lib.
