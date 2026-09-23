@@ -67,6 +67,9 @@ test {
     _ = @import("libs/attestation.zig");
     _ = @import("libs/api.zig");
     _ = @import("libs/fri/fp2.zig");
+    _ = @import("libs/stark/expr.zig");
+    _ = @import("libs/stark/commit.zig");
+    _ = @import("libs/stark/root.zig");
     _ = @import("libs/fri/domain.zig");
     _ = @import("libs/fri/root.zig");
     _ = @import("libs/air/root.zig");

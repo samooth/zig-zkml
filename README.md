@@ -2,7 +2,7 @@
 
 Verifiable-inference (zkML) layer for host inference engines — **llama.cpp, vLLM, zig-ai, ktransformers-zig** — via per-engine adapters: prove that a layer's output was produced by the committed model weights, using the engine's native kernels as the witness generator.
 
-**Status: F0/F1 foundations implemented; multi-engine redesign staged.** The technical specification lives in [BLUE_PRINT.md](BLUE_PRINT.md) (Spanish); the multi-engine compatibility plan (adapter matrix, staging, llama.cpp wrapper design) lives in [PLAN_MULTI_ENGINE.md](PLAN_MULTI_ENGINE.md). [zkML.md](zkML.md) is the earlier motivation document; BLUE_PRINT.md supersedes its open decisions. The L0/L2 foundations (field, merkle, transcript, tensor, trace, statement, attestation) are working — the engine adapters (Stages 0–4) and the STARK prover (F2+) come next.
+**Status: F0/F1 + all four engine adapters implemented; F2 STARK backend landed.** The technical specification lives in [BLUE_PRINT.md](BLUE_PRINT.md) (Spanish); the multi-engine compatibility plan (adapter matrix, staging, llama.cpp wrapper design) lives in [PLAN_MULTI_ENGINE.md](PLAN_MULTI_ENGINE.md). [zkML.md](zkML.md) is the earlier motivation document; BLUE_PRINT.md supersedes its open decisions. The L0/L2 foundations (field, merkle, transcript, tensor, trace, statement, attestation) and all four engine adapters (Stages 0–4) are working, and the F2 STARK backend (`libs/stark/`) proves a composed quotient. LogUp lookups, the real-GEMM witness and F3+ come next.
 
 ## What it does
 
@@ -68,6 +68,8 @@ libs/
 ├── trace/         # [done] TraceRecorder — canonical-order, thread-safe
 ├── statement/     # [done] StatementLayer — public inputs (§6.1)
 ├── gadgets/       # F2+: gemm, quant, nonlin, norm, routing
+├── stark/         # [done] STARK backend: fft, constraint IR, column
+│                  #        commitment, composition + quotient, verify
 ├── compile/       # F3+: CircuitGraph → AirGraph
 └── prove/         # F3+: prove()/verify() orchestration
 tools/
@@ -96,7 +98,7 @@ re-derives the root from the manifest and verifies the proof bytes.
 | **F0** | Weights attestation (Blake3 + Merkle at load time) — **lib + C ABI + independent auditor done** (`zig build verify` gate); **all four engine adapters done**: llama.cpp (`zig build llama-adapter`), zig-ai (module import), vLLM (ctypes, `zkml_attested`), ktransformers-zig (`zig build kt-adapter`) — each with a negative test and an independent cross-check | load overhead < 5% (not yet measured) |
 | **F1** | Deterministic, auditable sampling — **`zkml_transcript_seed` done in the ABI**; adapters consume it via the engine contract | zero kernel changes |
 | **Witness ABI v2** | `zkml_witness_*` session/record/finalize (additive) — **done** (Stage 5 of the multi-engine plan; `ZKML_ABI_VERSION = 2`) | determinism test green |
-| **F2** | `tensor` lib + GEMM gadget (AIR) with positive+negative tests — **tensor + FRI done**; STARK backend (constraint composition) pending | two spikes first: dep toolchain (semver `0.16.0-dev`), STARK/FRI over Goldilocks |
+| **F2** | `tensor` lib + GEMM gadget (AIR) with positive+negative tests — **STARK backend done** (`libs/stark/`: FFT, constraint IR, column commitment, RLC composition, quotient, FRI, query-time verification); LogUp lookups and the real-GEMM witness still pending | backend negatives green (tampered trace/opening/quotient/root, random trace) |
 | **F3** | `zkml_prove_layer` / `zkml_verify_layer` for one layer (Qwen3-Next shapes) | proof < 1 MB, verify < 100 ms, tampered witness (±1 ulp) rejected |
 | **F4** | fingerprint-sumcheck GEMM + multi-block recursion | product decision |
 
