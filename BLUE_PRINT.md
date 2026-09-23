@@ -5,6 +5,12 @@
 > documento histórico de motivación). Convenciones Zig 0.16 según
 > `LESSONS_ZIG.md` de ktransformers-zig (ArrayList unmanaged, allocator
 > explícito, shapes runtime, `comptime` solo para esquemas/backend).
+>
+> **Multi-motor**: desde la rediseño de compatibilidad, zig-zkml soporta
+> llama.cpp, vLLM, zig-ai y ktransformers-zig vía adapters — ver
+> [`PLAN_MULTI_ENGINE.md`](PLAN_MULTI_ENGINE.md). Este blueprint queda
+> como especificación del core agnóstico al motor; la matriz de adapters
+> y su staging viven en ese plan.
 
 ## 0. Cambios respecto a zkML.md
 
@@ -45,7 +51,8 @@ bloque MoE verificable (F2–F3), multi-bloque/recursion (F4).
 ## 2. Arquitectura de capas
 
 ```
-L4  C API                        kt_prove_* / kt_verify_* (patrón kt_kernel.h)
+L4  C API                        zkml_* (attest/prove/verify + witness ABI v2)
+       │                          — adapters por motor en adapters/<engine>/
        │
 L3  Compilador de modelo         CircuitGraph → AirGraph (columnas, grados,
        │                          lookup tables, schedule de gadgets)
@@ -254,8 +261,8 @@ W'. Sin `scheme_ids` elige aritmética más barata.
 
 ### 6.2 Orden canónico del transcript
 
-El `TraceRecorder` es multi-thread (ktransformers-zig ejecuta expertos en
-paralelo). Absorber en orden de llegada haría el hash no determinista y el
+El `TraceRecorder` es multi-thread (motores MoE como ktransformers ejecutan
+expertos en paralelo). Absorber en orden de llegada haría el hash no determinista y el
 Fiat-Shamir irreproducible. Diseño:
 
 - Grabación por slots `(layer, op, expert, tp_rank)` — arena por slot, sin
@@ -463,7 +470,7 @@ anterior (todas aplicadas):
   single-thread con los mismos datos.
 
 ```zig
-//! libs/trace/root.zig — hooks que exporta ktransformers-zig
+//! libs/trace/root.zig — hooks de witness que consume el motor host
 
 pub const TraceRecorder = struct {
     gpa: std.mem.Allocator,
@@ -501,12 +508,19 @@ pub const TraceRecorder = struct {
 ## 8. C API (superficie aditiva — zkml_c.h, HECHO para F0/F1)
 
 **Implementado** en `libs/api.zig` + `include/zkml_c.h` (ABI v1). Los
-wrappers `kt_*` de ktransformers-zig llaman a estos `zkml_*`; el patrón
+adapters por motor (`adapters/<engine>/`, ver `PLAN_MULTI_ENGINE.md`)
+llaman a estos `zkml_*`; el patrón
 es el mismo: handles opacos, allocator capturado en `*_create` (regla
 B1), emisión forzada con `comptime { _ = &fn; }` verificada con `nm`
 (gate `zig build abi`), y auditor independiente Python
 (`tools/verify_weights.py` — re-implementa hashing y wire format SIN
 compartir código con la librería; gate `zig build verify`).
+
+**Contrato de motor** (`include/zkml_engine.h`, Stage 0 del plan): cada
+adapter implementa weight-stream (un `zkml_attestor_add` por tensor en
+load) y witness hooks (`zkml_witness_begin_layer/record_op/end_layer`,
+ABI v2); el core nunca itera tensores ni conoce el runtime del motor —
+la iteración vive en el loader del motor, el hashing vive aquí.
 
 ```c
 // --- F0: attestation de pesos (streaming — un add() por tensor en load) ---
@@ -529,11 +543,20 @@ int   zkml_proof_verify(void* allocator, const uint8_t* proof, size_t len,
 int   zkml_transcript_seed(const uint8_t* ctx, size_t ctx_len,
                            uint8_t seed_out[32]);
 
+// --- Witness ABI v2 (aditivo — Stage 5 del plan multi-motor) ---
+//   ciclo: begin_layer → record_op* → end_layer → finalize
+int   zkml_witness_session_create(void* allocator);
+int   zkml_witness_begin_layer(int session, uint32_t layer_idx, ...);
+int   zkml_witness_record_op(int session, const ZKML_SlotKey* key,
+                             const void* payload, size_t payload_len);
+int   zkml_witness_end_layer(int session, uint8_t trace_hash_out[32]);
+int   zkml_witness_finalize(int session, uint8_t witness_id_out[32]);
+
 // --- F2+ (pendiente): verifiable inference por capa ---
-typedef struct ZKML_PROVER ZKML_PROVER;                     // kt_prover_* se
-ZKML_PROVER* zkml_prover_new(...);                          // mapea a esto
-int  zkml_prove_moe_layer(ZKML_PROVER*, int layer_idx, ...);
-int  zkml_verify_moe_layer(const uint8_t* weights_root, int layer_idx, ...);
+typedef struct ZKML_PROVER ZKML_PROVER;
+ZKML_PROVER* zkml_prover_new(...);                          // adapters se
+int  zkml_prove_layer(ZKML_PROVER*, int layer_idx, ...);    // mapean a esto
+int  zkml_verify_layer(const uint8_t* weights_root, int layer_idx, ...);
 ```
 
 Wire format del proof (`merkle.Proof.serialize`, versionado — cambia →
@@ -555,10 +578,11 @@ Reglas de la superficie F0/F1 (lecciones aplicadas):
 - destroy de un attestor a medio cargar es seguro (libera los nombres
   duped); double-destroy del mismo puntero es use-after-free como en
   cualquier handle C — documentado, no "protegido".
-- `kt_weights_merkle_root`/`kt_mla_weights_merkle_root` (la superficie
-  de §8 original) se implementan como glue 1:1 sobre
-  `zkml_attestor_*` en ktransformers-zig — el hashing vive aquí, la
-  iteración de tensors vive en el loader.
+- Los wrappers históricos `kt_weights_merkle_root`/`kt_mla_weights_merkle_root`
+  ahora viven como **adapter de referencia** en `adapters/ktransformers/`
+  (glue 1:1 sobre `zkml_attestor_*`); los demás motores (llama.cpp, zig-ai,
+  vLLM) exponen la misma superficie vía sus propios adapters — ver
+  `PLAN_MULTI_ENGINE.md` para la matriz completa.
 
 ## 9. Parámetros de seguridad
 
@@ -599,10 +623,10 @@ recalibran con el bench de F2. Los números duros de go/no-go están en §11.
 
 | Fase | Entregable | Deps | Go/no-go |
 |---|---|---|---|
-| **F0** | `kt_weights_merkle_root` (moe+mla) sobre `loadWeights`; test root estable ante reorden de lectura; `verify_weights.py` | ~~zig-algebra `merkle` (o ~200 líneas propias)~~ **HECHO**: C ABI `zkml_attestor_*` (`libs/api.zig`, `include/zkml_c.h`) + streaming `Builder` + wire format + `tools/verify_weights.py` (auditor INDEPENDIENTE en Python, cross-verifica root y proofs de Zig) + gates `zig build abi`/`verify` — pendiente: glue `kt_*` en ktransformers-zig | overhead de carga < 5% (por medir en la integración) |
-| **F1** | `kt_transcript_seed`; sampling reproducible | **HECHO (lib)**: `zkml_transcript_seed` en el ABI; falta el glue kt | cero cambio en kernels |
-| **F2** | `libs/tensor` + gadget GEMM v1 (AIR chunk-16) + suite positiva/negativa vs `gemmExpertExact` | **tensor HECHO; FRI Goldilocks HECHO** (`libs/fri/`): F_{p²} = F_p[i] (p ≡ 3 mod 4), toro de norma 1 con orden p+1 = 2^61 (subgrupos 2-ádicos, layout natural — el antipodal x/−x está en (i, i+n/2)), pliegue canónico even/odd con 1/x = conj(x) en el toro, residual TRUNCADO a grado < 2^log_d sobre dominio final con rate < 1 (rate 1 = vacío — lección de los tests), commitments vía zig-merkle (verifyHashed — hojas pre-hashed), transcript absorbBytes/absorbField/challengeField (rejection sampling canónico). **Suite de mutación**: honesto degree-2 VERIFICA; datos aleatorios 16/16 RECHAZA; degree-128 RECHAZA (los mismos tests que el FRI de zig-algebra fallaba). Pendiente F2: AIR del gadget GEMM + composición con el FRI |
-| **F3** | `kt_prove_moe_layer`/`kt_verify_moe_layer` para 1 experto (Qwen3-Next shape real); binding Poseidon2 traza↔leaf; bench por bloque | F2 | proof < 1 MB, verify < 100 ms, test negativo ±1 ulp RECHAZA |
+| **F0** | Weight attestation por motor (`zkml_attestor_*` sobre el loader de cada engine); test root estable ante reorden; `verify_weights.py` | ~~zig-algebra `merkle`~~ **HECHO**: C ABI + streaming `Builder` + wire format + `tools/verify_weights.py` (auditor INDEPENDIENTE) + gates `zig build abi`/`verify` — pendiente: adapters multi-motor (`adapters/llama_cpp`, `zig_ai`, `vllm`, `ktransformers` — ver `PLAN_MULTI_ENGINE.md` Stages 0–4) | overhead de carga < 5% (por medir en la integración) |
+| **F1** | `zkml_transcript_seed`; sampling reproducible | **HECHO (lib)**: `zkml_transcript_seed` en el ABI; adapters consumen vía contract | cero cambio en kernels |
+| **F2** | `libs/tensor` + gadget GEMM v1 (AIR chunk-16) + suite positiva/negativa vs witness exacto del motor | **tensor HECHO; FRI Goldilocks HECHO** (`libs/fri/`): F_{p²} = F_p[i] (p ≡ 3 mod 4), toro de norma 1 con orden p+1 = 2^61 (subgrupos 2-ádicos, layout natural — el antipodal x/−x está en (i, i+n/2)), pliegue canónico even/odd con 1/x = conj(x) en el toro, residual TRUNCADO a grado < 2^log_d sobre dominio final con rate < 1 (rate 1 = vacío — lección de los tests), commitments vía zig-merkle (verifyHashed — hojas pre-hashed), transcript absorbBytes/absorbField/challengeField (rejection sampling canónico). **Suite de mutación**: honesto degree-2 VERIFICA; datos aleatorios 16/16 RECHAZA; degree-128 RECHAZA. Pendiente F2: AIR del gadget GEMM + composición con el FRI (backend STARK — ver `TODO.md`) |
+| **F3** | `zkml_prove_layer`/`zkml_verify_layer` para 1 capa (shapes reales); binding Poseidon2 traza↔leaf; bench por bloque | F2 | proof < 1 MB, verify < 100 ms, test negativo ±1 ulp RECHAZA |
 | **F4** | fingerprint sumcheck v2 (GKR/zkLLM-style) + multi-bloque con recursion Poseidon2; Groth16 wrap solo si on-chain | zig-zk `sumcheck`, `snark` (si madura) | overhead GEMM < 50x; decisión de producto |
 
 Vendorear por defecto (path dep + tarball hash); fork propio en
@@ -627,7 +651,8 @@ Se adopta upstream cuando zig-zk/zig-algebra publique tags.
 - **Unit**: gadget vs kernel exacto (mismos A,B → mismo C), tabla SiLU vs
   referencia float con epsilon del esquema.
 - **Integración**: prove+verify sobre witness del path exacto de
-  `gemmExpertExact`/routing reales de ktransformers-zig (shapes Qwen3-Next).
+  los kernels reales del motor host (Qwen3-Next shapes; por adapter:
+  llama.cpp / zig-ai / vLLM / ktransformers-zig — ver `PLAN_MULTI_ENGINE.md`).
 - **Negativos (obligatorios)**: ±1 ulp en un elemento, índice de routing
   cambiado, scale alterada, weights_leaf distinto → RECHAZA. Scale fp16
   malformada (inf/NaN/subnormal/≥ 2^4) → **error en dequant**, nunca
@@ -636,7 +661,9 @@ Se adopta upstream cuando zig-zk/zig-algebra publique tags.
   misma seed FS (2 ejecuciones, mismo proof). Test implementado en
   `libs/trace/root.zig` (4 threads vs single-thread, mismo hash).
 - **ABI**: reusar `tools/verify_abi.py` (exports+arity) y
-  `tools/audit_layout.py`; `nm` para emisión real de símbolos.
+  `tools/audit_layout.py`; `nm` para emisión real de símbolos (v1 y v2).
+- **Adapters**: cada adapter shippea test negativo (byte corrupto → root
+  cambia / verify rechaza) cross-checkeado contra `verify_weights.py`.
 - **Bench**: extensión de `bench/gemm_bench.zig` midiendo overhead prover
   por GEMM y por bloque (ReleaseFast, nunca Debug).
 
