@@ -408,6 +408,11 @@ fn recompose(opening: Opening, system: System, alphas: []const Fp2) Fp2 {
     return acc;
 }
 
+/// Upper bound on composed constraints per AIR, so `verify` can keep the
+/// Fiat-Shamir alphas in a fixed stack array instead of allocating. It
+/// bounds the verifier's own AIR size, never a prover-supplied value.
+pub const max_composed_constraints: usize = 1024;
+
 pub fn verify(
     transcript: *Transcript,
     proof: *const Proof,
@@ -429,8 +434,14 @@ pub fn verify(
 
     transcript.absorbBytes(&proof.commitment.root);
     const n_composed = system.composedCount();
-    if (n_composed > 64) return Error.InvalidProof;
-    var alphas: [64]Fp2 = undefined;
+    // Resource guard, not a soundness parameter: `system` is the
+    // verifier's own AIR, so a prover cannot inflate this count. The bound
+    // exists because the alphas live in a fixed stack array below. 64 was
+    // enough for the one-MAC-per-row AIR but not for the chunked layout,
+    // which needs 2·slots range checks (1 + 4 constraints each) plus 2·slots
+    // dequantization equations — 193 composed constraints at 16 slots.
+    if (n_composed > max_composed_constraints) return Error.InvalidProof;
+    var alphas: [max_composed_constraints]Fp2 = undefined;
     for (0..n_composed) |i| alphas[i] = transcript.challengeField(Fp2);
 
     const fri_ok = fri.verify(transcript, &proof.fri_proof, config.fri) catch return false;

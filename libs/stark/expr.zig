@@ -114,9 +114,35 @@ pub const Window = struct {
     }
 };
 
+/// One lookup: the values in column `value` must be a permutation of the
+/// values in column `table`.
+///
+/// `p` and `q` hold 1/(beta·x + gamma) on each side and `acc` accumulates
+/// p - q, so the argument is the LogUp identity
+///
+///   sum_i 1/(beta·w_i + gamma) = sum_i 1/(beta·u_i + gamma)
+///
+/// which over a random (beta, gamma) holds iff the two multisets are
+/// equal. The p/q/acc columns are witness columns the prover fills in and
+/// the verifier checks. See libs/stark/logup.zig.
+pub const LookupSpec = struct {
+    value: u16,
+    table: u16,
+    p: u16,
+    q: u16,
+    acc: u16,
+};
+
 /// A named set of constraints evaluated together (one AIR).
 pub const System = struct {
     constraints: []const Constraint,
+    /// Lookup arguments active in this AIR, with their witness columns
+    /// already resolved. Purely descriptive: it tells whoever holds a
+    /// System which columns are LogUp witnesses and in what order the
+    /// protocol draws their challenges (before the commitment, see
+    /// logup.zig). Empty means "no lookups", which keeps every existing
+    /// AIR's transcript byte-for-byte unchanged.
+    lookups: []const LookupSpec = &.{},
 
     /// Degree bound of the COMPOSED constraints only — boundary
     /// constraints never enter P, so they do not widen the blowup.

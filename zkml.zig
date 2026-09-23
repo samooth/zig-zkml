@@ -71,7 +71,13 @@ test {
     _ = @import("libs/stark/commit.zig");
     _ = @import("libs/stark/root.zig");
     _ = @import("libs/stark/range.zig");
+    _ = @import("libs/stark/logup.zig");
+    _ = @import("libs/stark/logup_test.zig");
     _ = @import("libs/stark/gemm_air.zig");
+    _ = @import("libs/stark/gemm_chunk.zig");
+    _ = @import("libs/stark/chunk_binding.zig");
+    _ = @import("libs/stark/chunk_binding_test.zig");
+    _ = @import("libs/stark/gemm_chunk_test.zig");
     _ = @import("libs/stark/quant_test.zig");
     _ = @import("libs/stark/gemm_test.zig");
     _ = @import("libs/fri/domain.zig");
