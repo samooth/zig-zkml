@@ -76,13 +76,9 @@ pub fn Layout(comptime f: Format) type {
         pub const col_b_bits: u16 = col_a_bits + width;
         pub const col_a_sig: u16 = col_b_bits + width;
         pub const col_b_sig: u16 = col_a_sig + 1;
-        pub const col_a_exp_val: u16 = col_b_sig + 1;
-        pub const col_b_exp_val: u16 = col_a_exp_val + 1;
-        pub const col_a_exp_inv: u16 = col_b_exp_val + 1;
-        pub const col_a_nz_inv: u16 = col_a_exp_inv + 1;
-        pub const col_b_exp_inv: u16 = col_a_nz_inv + 1;
-        pub const col_b_nz_inv: u16 = col_b_exp_inv + 1;
-        pub const col_product: u16 = col_b_nz_inv + 1;
+        pub const col_a_exp_raw: u16 = col_b_sig + 1;
+        pub const col_b_exp_raw: u16 = col_a_exp_raw + 1;
+        pub const col_product: u16 = col_b_exp_raw + 1;
         pub const col_p_bits: u16 = col_product + 1;
         pub const col_norm: u16 = col_p_bits + prod_bits;
         pub const col_round: u16 = col_norm + 1;
@@ -111,19 +107,77 @@ pub fn Layout(comptime f: Format) type {
         pub const col_c_mant_val: u16 = col_c_bits + width;
         pub const col_diff: u16 = col_c_mant_val + 1;
         pub const col_not_overflow: u16 = col_diff + 1;
-        pub const col_d0: u16 = col_not_overflow + 1;
+        pub const col_path_on: u16 = col_not_overflow + 1;
+        pub const col_d0: u16 = col_path_on + 1;
         pub const col_d0_gap: u16 = col_d0 + 1;
         pub const col_c_exp_val: u16 = col_d0_gap + 1;
-        pub const col_exp_gap: u16 = col_c_exp_val + 1;
-        pub const col_exp_gap_inv: u16 = col_exp_gap + 1;
-        pub const col_overflow: u16 = col_exp_gap_inv + 1;
-        pub const column_count: usize = col_overflow + 1;
+        pub const col_overflow: u16 = col_c_exp_val + 1;
+
+        /// Classification of the two inputs. The AIR no longer ASSERTS that
+        /// they are normal — it classifies them, and the selector below
+        /// picks the answer. A subnormal input matches no class, which is
+        /// what makes it unsatisfiable rather than silently wrong.
+        pub const col_a_mant_val: u16 = col_overflow + 1;
+        pub const col_a_exp_zero: u16 = col_a_mant_val + 1;
+        pub const col_a_mant_zero: u16 = col_a_exp_zero + 1;
+        pub const col_a_exp_max: u16 = col_a_mant_zero + 1;
+        pub const col_a_zero_inv: u16 = col_a_exp_max + 1;
+        pub const col_a_mant_inv: u16 = col_a_zero_inv + 1;
+        pub const col_a_max_inv: u16 = col_a_mant_inv + 1;
+        pub const col_a_gap: u16 = col_a_max_inv + 1;
+        pub const col_b_mant_val: u16 = col_a_gap + 1;
+        pub const col_b_exp_zero: u16 = col_b_mant_val + 1;
+        pub const col_b_mant_zero: u16 = col_b_exp_zero + 1;
+        pub const col_b_exp_max: u16 = col_b_mant_zero + 1;
+        pub const col_b_zero_inv: u16 = col_b_exp_max + 1;
+        pub const col_b_mant_inv: u16 = col_b_zero_inv + 1;
+        pub const col_b_max_inv: u16 = col_b_mant_inv + 1;
+        pub const col_b_gap: u16 = col_b_max_inv + 1;
+
+        /// The classes, per operand. `is_normal` is the one the arithmetic
+        /// path uses; the other three feed the selector.
+        pub const col_a_is_zero: u16 = col_b_gap + 1;
+        pub const col_a_is_inf: u16 = col_a_is_zero + 1;
+        pub const col_a_is_nan: u16 = col_a_is_inf + 1;
+        pub const col_a_is_normal: u16 = col_a_is_nan + 1;
+        pub const col_b_is_zero: u16 = col_a_is_normal + 1;
+        pub const col_b_is_inf: u16 = col_b_is_zero + 1;
+        pub const col_b_is_nan: u16 = col_b_is_inf + 1;
+        pub const col_b_is_normal: u16 = col_b_is_nan + 1;
+
+        /// The sanitised values the arithmetic path reads, so it stays
+        /// satisfiable whatever the inputs are.
+        pub const col_a_sig_eff: u16 = col_b_is_normal + 1;
+        pub const col_a_exp_eff: u16 = col_a_sig_eff + 1;
+        pub const col_b_sig_eff: u16 = col_a_exp_eff + 1;
+        pub const col_b_exp_eff: u16 = col_b_sig_eff + 1;
+
+        /// The selected class: exactly one of nan / inf / zero / normal.
+        pub const col_nan_any: u16 = col_b_exp_eff + 1;
+        pub const col_bad_pair: u16 = col_nan_any + 1;
+        pub const col_s_nan: u16 = col_bad_pair + 1;
+        pub const col_s_inf: u16 = col_s_nan + 1;
+        pub const col_s_zero: u16 = col_s_inf + 1;
+        pub const col_s_normal: u16 = col_s_zero + 1;
+
+        /// The ANSWER's bits, selected from the arithmetic path's bits and
+        /// the three special patterns.
+        pub const col_out: u16 = col_s_normal + 1;
+        pub const column_count: usize = col_out + width;
 
         pub inline fn aBit(i: u16) u16 {
             return col_a_bits + i;
         }
         pub inline fn bBit(i: u16) u16 {
             return col_b_bits + i;
+        }
+        /// The RAW exponent field value, which the classifier reads. The
+        /// reconstruction constraints below are on the sanitised columns.
+        pub inline fn aExpVal() u16 {
+            return col_a_exp_raw;
+        }
+        pub inline fn bExpVal() u16 {
+            return col_b_exp_raw;
         }
         pub inline fn pBit(i: u16) u16 {
             return col_p_bits + i;
@@ -176,6 +230,7 @@ const bld = @import("./air_builder.zig");
 const Builder = bld.Builder;
 const LinTerm = bld.LinTerm;
 pub const Trace = bld.Trace;
+const FRange = bld.FRange;
 const g = bld.g;
 const kNegModPow2 = bld.kNegModPow2;
 const kOne = bld.kOne;
@@ -188,7 +243,7 @@ fn cname(comptime fmt: []const u8, comptime args: anytype) []const u8 {
 }
 
 /// Number of constraints per multiply — the spike's headline number.
-pub const constraints_per_multiply: usize = 118;
+pub const constraints_per_multiply: usize = 163;
 
 /// The cost model, in constraints per multiply, derived from the format's
 /// widths: 2·byteWidth bit-decompositions, the product's bit-decomposition
@@ -209,7 +264,16 @@ pub fn expected_constraints(f: Format) usize {
     // the output mantissa's value (+1), the rounded-mantissa difference
     // (+1), the not-overflow complement (+1), the gated equation (+1), and
     // the zero mantissa on overflow (+1).
-    return 3 * @as(usize, f.byteWidth()) + f.productBits() + f.keptHigh() + 37;
+    // 4·width + productBits + sigBits + 66, MEASURED for the four formats
+    // and pinned by the cost test. FOUR width-dependent parts, not three:
+    // the two operand bit decompositions, the OUTPUT's, the product's, the
+    // kept significand's, and the answer selector, which is one constraint
+    // per output bit. The constant is the classifier (two mantissa values,
+    // six zero-or-invertible pairs on the two exponent gaps, the two
+    // mantissa-zero flags, eight class bits, four sanitised values), the
+    // four answer rules with the exhaustiveness, the selector's gating
+    // column, and the overflow switch.
+    return 4 * @as(usize, f.byteWidth()) + f.productBits() + f.keptHigh() + 66;
 }
 
 /// Build the fp16 multiply AIR. `rows` multiplies, one per row.
@@ -287,7 +351,7 @@ pub fn buildSystem(allocator: std.mem.Allocator, rows: usize, comptime f: Format
     // linear constraints are what keep the inverse proofs at degree 2.
     {
         var ts: [L.exps + 1]LinTerm = undefined;
-        ts[0] = .{ .factors = try b.one(L.col_a_exp_val) };
+        ts[0] = .{ .factors = try b.one(L.aExpVal()) };
         for (0..L.exps) |i| {
             ts[1 + i] = .{
                 .factors = try b.one(L.aExp() + @as(u16, @intCast(i))),
@@ -298,7 +362,7 @@ pub fn buildSystem(allocator: std.mem.Allocator, rows: usize, comptime f: Format
     }
     {
         var ts: [L.exps + 1]LinTerm = undefined;
-        ts[0] = .{ .factors = try b.one(L.col_b_exp_val) };
+        ts[0] = .{ .factors = try b.one(L.bExpVal()) };
         for (0..L.exps) |i| {
             ts[1 + i] = .{
                 .factors = try b.one(L.bExp() + @as(u16, @intCast(i))),
@@ -308,32 +372,47 @@ pub fn buildSystem(allocator: std.mem.Allocator, rows: usize, comptime f: Format
         try b.lin("b exponent value", .composed, &ts);
     }
 
-    // The inputs are normal and finite: exp != 0 and exp != 31. Proved by
-    // the field inverse trick — x·x⁻¹ = 1 has a solution iff x != 0 — so
-    // no range check and no lookup is needed.
-    try b.lin("a exponent is non-zero", .composed, &.{
-        .{ .factors = try b.pair(L.col_a_exp_inv, L.col_a_exp_val), .coefficient = kOne },
-        .{ .factors = try b.constant(kOne), .coefficient = kNegOne },
-    });
-    try b.lin("a exponent is below emax", .composed, &.{
-        .{ .factors = try b.pair(L.col_a_nz_inv, L.col_a_exp_val), .coefficient = kNegOne },
-        .{ .factors = try b.one(L.col_a_nz_inv), .coefficient = g(f.emax()) },
-        .{ .factors = try b.constant(kOne), .coefficient = kNegOne },
-    });
-    try b.lin("b exponent is non-zero", .composed, &.{
-        .{ .factors = try b.pair(L.col_b_exp_inv, L.col_b_exp_val), .coefficient = kOne },
-        .{ .factors = try b.constant(kOne), .coefficient = kNegOne },
-    });
-    try b.lin("b exponent is below emax", .composed, &.{
-        .{ .factors = try b.pair(L.col_b_nz_inv, L.col_b_exp_val), .coefficient = kNegOne },
-        .{ .factors = try b.one(L.col_b_nz_inv), .coefficient = g(f.emax()) },
-        .{ .factors = try b.constant(kOne), .coefficient = kNegOne },
-    });
+    // Input classification. The AIR used to ASSERT exp != 0 and exp != emax
+    // with two inverses per operand; now it CLASSIFIES both operands, and
+    // the selector below picks the answer. A subnormal input matches no
+    // class at all, and the exhaustiveness constraint is what turns that
+    // into "unprovable" instead of "silently wrong".
+    for (0..2) |which| {
+        const mant_val = if (which == 0) L.col_a_mant_val else L.col_b_mant_val;
+        const exp_zero = if (which == 0) L.col_a_exp_zero else L.col_b_exp_zero;
+        const mant_zero = if (which == 0) L.col_a_mant_zero else L.col_b_mant_zero;
+        const exp_max = if (which == 0) L.col_a_exp_max else L.col_b_exp_max;
+        const zero_inv = if (which == 0) L.col_a_zero_inv else L.col_b_zero_inv;
+        const mant_inv = if (which == 0) L.col_a_mant_inv else L.col_b_mant_inv;
+        const max_inv = if (which == 0) L.col_a_max_inv else L.col_b_max_inv;
+        const gap = if (which == 0) L.col_a_gap else L.col_b_gap;
+
+        var mv: [1 + f.mant_bits]LinTerm = undefined;
+        mv[0] = .{ .factors = try b.one(mant_val) };
+        for (0..f.mant_bits) |i| {
+            mv[1 + @as(usize, @intCast(i))] = .{
+                .factors = try b.one(if (which == 0) L.aBit(@intCast(i)) else L.bBit(@intCast(i))),
+                .coefficient = g(kNegModPow2(@intCast(i))),
+            };
+        }
+        try b.lin("input mantissa value is its bits", .composed, &mv);
+        try b.lin("mantissa gap to emax", .composed, &.{
+            .{ .factors = try b.one(gap) },
+            .{ .factors = try b.one(if (which == 0) L.aExpVal() else L.bExpVal()) },
+            .{ .factors = try b.constant(g(f.emax())), .coefficient = kNegOne },
+        });
+        const exp_val = if (which == 0) L.aExpVal() else L.bExpVal();
+        // "[exp == 0]" and "[mantissa == 0]" are the zero-or-invertible
+        // pattern: no range check, no comparison, one witness each.
+        try b.zeroOrNonZero("exponent is zero", exp_val, zero_inv, exp_zero);
+        try b.zeroOrNonZero("mantissa is zero", mant_val, mant_inv, mant_zero);
+        try b.zeroOrNonZero("exponent is all ones", gap, max_inv, exp_max);
+    }
 
     // The exact product. One degree-2 constraint is the entire "multiply".
     try b.lin("product = a_sig · b_sig", .composed, &.{
         .{ .factors = try b.one(L.col_product) },
-        .{ .factors = try b.pair(L.col_a_sig, L.col_b_sig), .coefficient = kNegOne },
+        .{ .factors = try b.pair(L.col_a_sig_eff, L.col_b_sig_eff), .coefficient = kNegOne },
     });
 
     // The product's own bit decomposition: this is what makes the round
@@ -454,33 +533,38 @@ pub fn buildSystem(allocator: std.mem.Allocator, rows: usize, comptime f: Format
         // what MAKES the flag correct rather than a separate assumption.
         // d0 = ea + eb + keep + carry − (bias + mant_bits), the arithmetic
         // exponent. The OUTPUT's exponent is the clamped copy, below.
+        // GATED by s_normal: for a special row the arithmetic exponent is
+        // meaningless, and the clamp below then has nothing sensible to
+        // clamp. Gating costs one factor per term and stays degree 2.
+        const gate: FRange = @as(FRange, try b.one(L.col_s_normal));
+        const raw_terms = [_]LinTerm{.{ .factors = try b.one(L.col_d0) }};
         var ts: [2 * f.exp_bits + 4]LinTerm = undefined;
         var n: usize = 0;
-        ts[n] = .{ .factors = try b.one(L.col_d0) };
+        ts[n] = .{ .factors = try b.pairOf(gate, raw_terms[0].factors) };
         n += 1;
         for (0..L.exps) |i| {
             ts[n] = .{
-                .factors = try b.one(L.aExp() + @as(u16, @intCast(i))),
+                .factors = try b.pairOf(gate, @as(FRange, try b.one(L.aExp() + @as(u16, @intCast(i))))),
                 .coefficient = g(kNegModPow2(@intCast(i))),
             };
             n += 1;
         }
         for (0..L.exps) |i| {
             ts[n] = .{
-                .factors = try b.one(L.bExp() + @as(u16, @intCast(i))),
+                .factors = try b.pairOf(gate, @as(FRange, try b.one(L.bExp() + @as(u16, @intCast(i))))),
                 .coefficient = g(kNegModPow2(@intCast(i))),
             };
             n += 1;
         }
-        ts[n] = .{ .factors = try b.one(L.col_norm), .coefficient = g(kNegModPow2(0)) };
+        ts[n] = .{ .factors = try b.pairOf(gate, @as(FRange, try b.one(L.col_norm))), .coefficient = g(kNegModPow2(0)) };
         n += 1;
-        ts[n] = .{ .factors = try b.one(L.col_carry), .coefficient = g(kNegModPow2(0)) };
+        ts[n] = .{ .factors = try b.pairOf(gate, @as(FRange, try b.one(L.col_carry))), .coefficient = g(kNegModPow2(0)) };
         n += 1;
         // -(keep = keptLow + norm) and +(bias + mant_bits) (the exponent
         // unwind). The first was missing for one iteration, which showed up
         // as every row evaluating to exactly 10.
         const unwind: u16 = @as(u16, f.bias) + @as(u16, f.mant_bits) - @as(u16, f.keptLow());
-        ts[n] = .{ .factors = try b.constant(g(unwind)) };
+        ts[n] = .{ .factors = try b.pairOf(gate, @as(FRange, try b.constant(g(unwind)))) };
         n += 1;
         try b.lin(nm_exp, .composed, ts[0..n]);
     }
@@ -557,9 +641,17 @@ pub fn buildSystem(allocator: std.mem.Allocator, rows: usize, comptime f: Format
         // degree 2, because `diff` and `c_mant_val` are columns and the
         // factor is a column too: gating the original equation instead
         // would have been degree 3 (implicit·carry·(1−overflow)).
-        try b.lin("mantissa equation, gated on not overflowing", .composed, &.{
-            .{ .factors = try b.pair(L.col_diff, L.col_not_overflow), .coefficient = kNegOne },
-            .{ .factors = try b.pair(L.col_c_mant_val, L.col_not_overflow) },
+        // "The arithmetic path is live" is normal AND not overflowing. Gating
+        // the mantissa equation on not_overflow alone was not enough: a NaN
+        // answer does not overflow, but its mantissa is the NaN pattern, which
+        // the arithmetic path never produces.
+        try b.lin("the arithmetic path is live", .composed, &.{
+            .{ .factors = try b.one(L.col_path_on) },
+            .{ .factors = try b.pair(L.col_s_normal, L.col_not_overflow), .coefficient = kNegOne },
+        });
+        try b.lin("mantissa equation, gated on the arithmetic path", .composed, &.{
+            .{ .factors = try b.pair(L.col_diff, L.col_path_on), .coefficient = kNegOne },
+            .{ .factors = try b.pair(L.col_c_mant_val, L.col_path_on) },
         });
 
         // And the output mantissa is ZERO when it overflows, which is what
@@ -572,15 +664,193 @@ pub fn buildSystem(allocator: std.mem.Allocator, rows: usize, comptime f: Format
     }
 
     // The overflow flag: emax − ec == 0 exactly when the rounded exponent
-    // reached the all-ones field, which is exactly when IEEE-754 says the
-    // result is infinity. `zeroOrNonZero` is the only way this IR can say
-    // "is zero": an inverse witness plus a product.
-    try b.lin("exponent gap to emax", .composed, &.{
-        .{ .factors = try b.one(L.col_exp_gap) },
-        .{ .factors = try b.one(L.cExpVal()) },
-        .{ .factors = try b.constant(g(f.emax())), .coefficient = kNegOne },
+    // The biconditional "overflow iff the exponent field is all ones" WAS
+    // here, as a zeroOrNonZero over the gap emax − ec. Its flag meant "the
+    // gap is zero", so it asserted exactly what NaN breaks: a NaN answer
+    // has the all-ones exponent with a nonzero mantissa and overflow at
+    // zero. Both directions are still forced without it. "overflow = 1
+    // gives ec = emax" is the clamp below, reading gap = emax − d0. The
+    // other way — overflow = 0 with ec = emax — is the d0 equation, whose
+    // arithmetic exponent is above emax for a real overflow. The two
+    // together leave no satisfying assignment, which was the point, for
+    // three constraints cheaper.
+
+    // The classes. Every one is a product of two booleans, so each is
+    // boolean for free:
+    //   zero   = expZero AND mantZero        inf = expMax AND mantZero
+    //   nan    = expMax AND NOT mantZero    normal = NOT expZero AND NOT expMax
+    // A subnormal is expZero AND NOT mantZero, which is none of them, and
+    // the exhaustiveness constraint below is what rejects it.
+    for (0..2) |which| {
+        const exp_zero = if (which == 0) L.col_a_exp_zero else L.col_b_exp_zero;
+        const mant_zero = if (which == 0) L.col_a_mant_zero else L.col_b_mant_zero;
+        const exp_max = if (which == 0) L.col_a_exp_max else L.col_b_exp_max;
+        const is_zero = if (which == 0) L.col_a_is_zero else L.col_b_is_zero;
+        const is_inf = if (which == 0) L.col_a_is_inf else L.col_b_is_inf;
+        const is_nan = if (which == 0) L.col_a_is_nan else L.col_b_is_nan;
+        const is_normal = if (which == 0) L.col_a_is_normal else L.col_b_is_normal;
+
+        try b.lin("input is zero", .composed, &.{
+            .{ .factors = try b.one(is_zero) },
+            .{ .factors = try b.pair(exp_zero, mant_zero), .coefficient = kNegOne },
+        });
+        try b.lin("input is infinity", .composed, &.{
+            .{ .factors = try b.one(is_inf) },
+            .{ .factors = try b.pair(exp_max, mant_zero), .coefficient = kNegOne },
+        });
+        // is_nan = exp_max − exp_max·mant_zero. The exponent is all ones
+        // AND the mantissa is not zero; written as a sum so it stays
+        // degree 2.
+        try b.lin("input is NaN", .composed, &.{
+            .{ .factors = try b.one(is_nan) },
+            .{ .factors = try b.pair(exp_max, mant_zero), .coefficient = kOne },
+            .{ .factors = try b.one(exp_max), .coefficient = kNegOne },
+        });
+        try b.lin("input is normal", .composed, &.{
+            .{ .factors = try b.one(is_normal) },
+            .{ .factors = try b.one(exp_zero) },
+            .{ .factors = try b.one(exp_max) },
+            .{ .factors = try b.constant(kOne), .coefficient = kNegOne },
+            .{ .factors = try b.pair(exp_zero, exp_max), .coefficient = kNegOne },
+        });
+    }
+
+    // The arithmetic path reads sanitised values, so it stays satisfiable
+    // whatever the inputs are: a special operand becomes 1.0, and the
+    // selector below discards whatever the path then computes. Without this
+    // a zero operand would drive the exponent to a negative value that the
+    // output's own exponent bits cannot hold, and the system would be
+    // unsatisfiable for a case the answer exists.
+    for (0..2) |which| {
+        const is_normal = if (which == 0) L.col_a_is_normal else L.col_b_is_normal;
+        const sig = if (which == 0) L.col_a_sig else L.col_b_sig;
+        const sig_eff = if (which == 0) L.col_a_sig_eff else L.col_b_sig_eff;
+        const exp_val = if (which == 0) L.aExpVal() else L.bExpVal();
+        const exp_eff = if (which == 0) L.col_a_exp_eff else L.col_b_exp_eff;
+        const bias: u16 = @intCast(f.bias);
+        // eff = normal ? value : fallback, written as
+        // eff − normal·value − fallback + normal·fallback = 0. The last
+        // term is what makes it a mux instead of a blend: without it a
+        // special operand would shift the result by the fallback.
+        // The fallback rides on the same boolean as a second FACTOR, so the
+        // product stays degree 2 instead of becoming a constant times a
+        // product of three.
+        const normal_col: FRange = @as(FRange, try b.one(is_normal));
+        const sig_fb: FRange = @as(FRange, try b.constant(g(f.mantImplicit())));
+        const exp_fb: FRange = @as(FRange, try b.constant(g(bias)));
+        try b.lin("sanitised significand", .composed, &.{
+            .{ .factors = try b.one(sig_eff) },
+            .{ .factors = try b.pair(is_normal, sig), .coefficient = kNegOne },
+            .{ .factors = sig_fb, .coefficient = kNegOne },
+            .{ .factors = try b.pairOf(normal_col, sig_fb) },
+        });
+        try b.lin("sanitised exponent", .composed, &.{
+            .{ .factors = try b.one(exp_eff) },
+            .{ .factors = try b.pair(is_normal, exp_val), .coefficient = kNegOne },
+            .{ .factors = exp_fb, .coefficient = kNegOne },
+            .{ .factors = try b.pairOf(normal_col, exp_fb) },
+        });
+    }
+
+    // Which answer. IEEE-754: NaN if either operand is NaN; NaN if one is
+    // infinite and the other zero; infinity if one is infinite and the other
+    // is finite and non-zero; zero if either is zero. `nan_a` and `nan_b`
+    // are NOT mutually exclusive, so their combination is an OR, while the
+    // two "inf times zero" cases cannot both hold (one operand cannot be
+    // infinite and zero at once), so their sum is already the OR.
+    try b.lin("either operand is NaN", .composed, &.{
+        .{ .factors = try b.one(L.col_nan_any) },
+        .{ .factors = try b.one(L.col_a_is_nan), .coefficient = kNegOne },
+        .{ .factors = try b.one(L.col_b_is_nan), .coefficient = kNegOne },
+        .{ .factors = try b.pair(L.col_a_is_nan, L.col_b_is_nan) },
     });
-    try b.zeroOrNonZero("overflow is the all-ones exponent", L.col_exp_gap, L.col_exp_gap_inv, L.col_overflow);
+    try b.lin("infinity times zero is a bad pair", .composed, &.{
+        .{ .factors = try b.one(L.col_bad_pair) },
+        .{ .factors = try b.pair(L.col_a_is_inf, L.col_b_is_zero), .coefficient = kNegOne },
+        .{ .factors = try b.pair(L.col_b_is_inf, L.col_a_is_zero), .coefficient = kNegOne },
+    });
+    try b.lin("the answer is NaN", .composed, &.{
+        .{ .factors = try b.one(L.col_s_nan) },
+        .{ .factors = try b.one(L.col_nan_any), .coefficient = kNegOne },
+        .{ .factors = try b.one(L.col_bad_pair), .coefficient = kNegOne },
+    });
+    // infinity: some operand is infinite, the other is neither a NaN nor a
+    // zero, and BOTH may be infinite (inf·inf = inf, so the OR needs its
+    // a·b correction — the one case where two specials meet and the answer
+    // is still infinity). Six degree-2 terms, no triple products.
+    try b.lin("the answer is infinity", .composed, &.{
+        .{ .factors = try b.one(L.col_s_inf) },
+        .{ .factors = try b.pair(L.col_a_is_inf, L.col_b_is_inf) },
+        .{ .factors = try b.one(L.col_a_is_inf), .coefficient = kNegOne },
+        .{ .factors = try b.one(L.col_b_is_inf), .coefficient = kNegOne },
+        .{ .factors = try b.pair(L.col_a_is_inf, L.col_b_is_nan) },
+        .{ .factors = try b.pair(L.col_a_is_inf, L.col_b_is_zero) },
+        .{ .factors = try b.pair(L.col_b_is_inf, L.col_a_is_nan) },
+        .{ .factors = try b.pair(L.col_b_is_inf, L.col_a_is_zero) },
+    });
+    // zero: some operand is zero (both may be, hence the a·b correction),
+    // minus the two bad pairs, which are exactly zero-with-infinity. A NaN
+    // operand is never zero, so no NaN term is needed.
+    try b.lin("the answer is zero", .composed, &.{
+        .{ .factors = try b.one(L.col_s_zero) },
+        .{ .factors = try b.pair(L.col_a_is_zero, L.col_b_is_zero) },
+        .{ .factors = try b.one(L.col_a_is_zero), .coefficient = kNegOne },
+        .{ .factors = try b.one(L.col_b_is_zero), .coefficient = kNegOne },
+        .{ .factors = try b.pair(L.col_bad_pair, L.col_a_is_zero) },
+        .{ .factors = try b.pair(L.col_bad_pair, L.col_b_is_zero) },
+    });
+    try b.lin("the answer is the normal path", .composed, &.{
+        .{ .factors = try b.one(L.col_s_normal) },
+        .{ .factors = try b.pair(L.col_a_is_normal, L.col_b_is_normal), .coefficient = kNegOne },
+    });
+
+    // EXHAUSTIVENESS, and this is the constraint that makes the whole thing
+    // sound: a subnormal input is not zero, not infinite, not NaN and not
+    // normal, so the four selectors are all zero and the sum below cannot
+    // be one. Without it such an input would fall through to the normal
+    // branch and the prover could claim 1.0 · 1.0 = 1.0 for it.
+    try b.lin("exactly one answer class", .composed, &.{
+        .{ .factors = try b.one(L.col_s_nan) },
+        .{ .factors = try b.one(L.col_s_inf) },
+        .{ .factors = try b.one(L.col_s_zero) },
+        .{ .factors = try b.one(L.col_s_normal) },
+        .{ .factors = try b.constant(kOne), .coefficient = kNegOne },
+    });
+
+    // The selected answer, one constraint per output bit. The three
+    // special patterns are constants except for the sign, and the sign of a
+    // NaN is 0 by the reference's canonical choice, so the NaN pattern adds
+    // nothing to the sign bit. Each bit is a selection among booleans, so
+    // the answer is boolean without a booleanity constraint.
+    const nan_mantissa: u16 = @intCast((@as(u32, 1) << @intCast(f.mant_bits - 1)));
+    for (0..L.width) |i| {
+        const d: u16 = @intCast(i);
+        const is_sign = d == L.width - 1;
+        const is_exp = d >= f.mant_bits and d < f.mant_bits + f.exp_bits;
+        const is_nan_mant = !is_sign and !is_exp and
+            (d == f.mant_bits - 1) and nan_mantissa != 0;
+        var terms: [5]LinTerm = undefined;
+        var n: usize = 0;
+        terms[n] = .{ .factors = try b.pair(L.col_s_normal, L.cBit(d)), .coefficient = kNegOne };
+        n += 1;
+        terms[n] = .{ .factors = try b.one(L.col_out + d) };
+        n += 1;
+        if (is_sign) {
+            terms[n] = .{ .factors = try b.pair(L.col_s_zero, L.cSign()), .coefficient = kNegOne };
+            n += 1;
+            terms[n] = .{ .factors = try b.pair(L.col_s_inf, L.cSign()), .coefficient = kNegOne };
+            n += 1;
+        } else if (is_exp) {
+            terms[n] = .{ .factors = try b.one(L.col_s_inf), .coefficient = kNegOne };
+            n += 1;
+            terms[n] = .{ .factors = try b.one(L.col_s_nan), .coefficient = kNegOne };
+            n += 1;
+        } else if (is_nan_mant) {
+            terms[n] = .{ .factors = try b.one(L.col_s_nan), .coefficient = kNegOne };
+            n += 1;
+        }
+        try b.lin("the answer's bit is selected", .composed, terms[0..n]);
+    }
 
     // The output sign is the XOR of the input signs: a + b − 2ab.
     try b.lin("c_sign = a_sign XOR b_sign", .composed, &.{
@@ -631,6 +901,14 @@ pub const BuildTraceError = error{
     UnsupportedCase,
 };
 
+fn set(cols: [][]Fp2, col: u16, r: usize, v: u64) void {
+    cols[col][r] = Fp2.re(Goldilocks.fromU64(v));
+}
+
+fn a_sig_or_b_sig(p: Format.Parts, f: Format) u64 {
+    return @as(u64, f.mantImplicit()) + @as(u64, p.mantissa);
+}
+
 /// How many of the low `n` bits are set. The AIR recomputes this as a
 /// column and proves it is non-zero exactly when the OR must be 1.
 fn popCount(v: u32, n: u8) u32 {
@@ -645,6 +923,31 @@ fn popCount(v: u32, n: u8) u32 {
 /// from the reference's own decomposition, so the AIR and the reference
 /// cannot silently disagree about the answer — a disagreement surfaces as
 /// a failed proof, not a passing one.
+/// The exponent the NORMAL path computes for a product of two normal
+/// operands, before any rounding: the same arithmetic the AIR's `d0`
+/// column carries, exposed so the scope guard and the test sweep can agree
+/// on one definition instead of two copies of the formula.
+///
+/// It is signed and it is NOT the answer: a value of 0 or less means the
+/// exact product lands in the subnormal range (or below it), which the
+/// normal path cannot represent — and which still needs refusing when the
+/// ROUNDED answer is the min normal, because the rounding that gets it
+/// there is the subnormal path that is not built yet. 0x83FF's exact
+/// product with 0x0400 is the case that proved the point: the answer is
+/// 0x8400, a perfectly normal number, and the AIR still could not prove
+/// it.
+pub fn arithmeticExponent(comptime f: Format, a: u16, b: u16) i64 {
+    const pa = f.parts(a);
+    const pb = f.parts(b);
+    const product: u64 = @as(u64, f.mantImplicit() + pa.mantissa) *
+        @as(u64, f.mantImplicit() + pb.mantissa);
+    const norm: i64 = if ((product >> @intCast(f.normBit())) & 1 == 1) 1 else 0;
+    const keep: u8 = if ((product >> @intCast(f.normBit())) & 1 == 1) f.keptHigh() else f.keptLow();
+    const carry: i64 = if ((product >> @intCast(@as(u8, keep) + f.sigBits())) & 1 == 1) 1 else 0;
+    return @as(i64, pa.exponent) + @as(i64, pb.exponent) + norm + carry +
+        @as(i64, f.keptLow()) - (@as(i64, f.bias) + @as(i64, f.mant_bits));
+}
+
 pub fn buildTrace(
     allocator: std.mem.Allocator,
     pairs: []const [2]u16,
@@ -663,18 +966,35 @@ pub fn buildTrace(
         const b = pair[1];
         const pa = f.parts(a);
         const pb = f.parts(b);
-        if (pa.exponent == 0 or pb.exponent == 0 or
-            pa.exponent == f.emax() or pb.exponent == f.emax())
-        {
-            return BuildTraceError.UnsupportedCase;
-        }
+        // Subnormal inputs are out of scope, and the AIR proves it rather
+        // than accepting them: a subnormal matches no class, so the
+        // exhaustiveness constraint cannot be satisfied. Zero, infinity and
+        // NaN are IN scope from here on.
+        if (pa.exponent == 0 and pa.mantissa != 0) return BuildTraceError.UnsupportedCase;
+        if (pb.exponent == 0 and pb.mantissa != 0) return BuildTraceError.UnsupportedCase;
         const expected = float_ref.multiply(f, a, b) catch return BuildTraceError.UnsupportedCase;
         const pc = f.parts(expected);
-        // An infinite result is IN SCOPE now: the overflow flag is what makes
-        // it one. A subnormal result is still out (it needs the range
-        // reduction, see the design note in TODO.md).
-        if (pc.exponent == 0) return BuildTraceError.UnsupportedCase;
-        const overflow: u32 = if (pc.exponent == f.emax()) 1 else 0;
+        // An infinite result is IN SCOPE now (the overflow flag is what
+        // makes it one) and so is a ZERO one, which is what a zero operand
+        // produces. What is still out of scope is any result with an
+        // exponent field of zero that the normal path cannot have produced:
+        // a subnormal, and the UNDERFLOW of two normal operands down to
+        // zero. Both are refused rather than rounded, because the range
+        // reduction that would prove them is not built yet — and note the
+        // refusal is forced by the AIR too, not just by this guard: with
+        // s_normal = 1 the exponent equation demands the arithmetic
+        // exponent, which no representable result with a zero exponent
+        // field has.
+        const inputs_normal = pa.exponent != 0 and pa.exponent != f.emax() and
+            pb.exponent != 0 and pb.exponent != f.emax();
+        if (inputs_normal and arithmeticExponent(f, a, b) <= 0) {
+            return BuildTraceError.UnsupportedCase;
+        }
+        if (pc.exponent == 0 and pc.mantissa != 0) return BuildTraceError.UnsupportedCase;
+        // Overflow means INFINITY, not merely an all-ones exponent: a NaN
+        // answer has one too, and the "overflow has a zero mantissa"
+        // constraint says exactly the difference.
+        const overflow: u32 = if (pc.exponent == f.emax() and pc.mantissa == 0) 1 else 0;
 
         trace.writeBits(L.col_a_bits, a, @intCast(f.byteWidth()), r);
         trace.writeBits(L.col_b_bits, b, @intCast(f.byteWidth()), r);
@@ -688,14 +1008,68 @@ pub fn buildTrace(
         // Field inverses witness "this exponent field is neither 0 nor 31".
         const a_exp: u64 = pa.exponent;
         const b_exp: u64 = pb.exponent;
-        cols[L.col_a_exp_val][r] = Fp2.re(Goldilocks.fromU64(a_exp));
-        cols[L.col_b_exp_val][r] = Fp2.re(Goldilocks.fromU64(b_exp));
-        cols[L.col_a_exp_inv][r] = Fp2.re(Goldilocks.fromU64(a_exp).inv() catch unreachable);
-        cols[L.col_a_nz_inv][r] = Fp2.re(Goldilocks.fromU64(f.emax() - a_exp).inv() catch unreachable);
-        cols[L.col_b_exp_inv][r] = Fp2.re(Goldilocks.fromU64(b_exp).inv() catch unreachable);
-        cols[L.col_b_nz_inv][r] = Fp2.re(Goldilocks.fromU64(f.emax() - b_exp).inv() catch unreachable);
+        cols[L.aExpVal()][r] = Fp2.re(Goldilocks.fromU64(a_exp));
+        cols[L.bExpVal()][r] = Fp2.re(Goldilocks.fromU64(b_exp));
 
-        const product: u32 = a_sig * b_sig;
+        // The arithmetic runs on the SANITISED significands, so a special
+        // operand multiplies the implicit one and the whole path is inert
+        // until the selector turns it back off.
+        const a_normal: bool = pa.exponent != 0 and pa.exponent != f.emax();
+        const b_normal: bool = pb.exponent != 0 and pb.exponent != f.emax();
+        const both_normal_row: u64 = if (a_normal and b_normal) 1 else 0;
+        const a_exp_eff: u64 = if (a_normal) pa.exponent else @as(u16, f.bias);
+        const b_exp_eff: u64 = if (b_normal) pb.exponent else @as(u16, f.bias);
+        const a_sig_eff: u32 = if (a_normal) a_sig else f.mantImplicit();
+        const b_sig_eff: u32 = if (b_normal) b_sig else f.mantImplicit();
+        const product: u32 = a_sig_eff * b_sig_eff;
+        // The classification, one operand at a time.
+        for ([_]Format.Parts{ pa, pb }, 0..) |p, which| {
+            const mant_val = if (which == 0) L.col_a_mant_val else L.col_b_mant_val;
+            const exp_zero = if (which == 0) L.col_a_exp_zero else L.col_b_exp_zero;
+            const mant_zero = if (which == 0) L.col_a_mant_zero else L.col_b_mant_zero;
+            const exp_max = if (which == 0) L.col_a_exp_max else L.col_b_exp_max;
+            const zero_inv = if (which == 0) L.col_a_zero_inv else L.col_b_zero_inv;
+            const mant_inv = if (which == 0) L.col_a_mant_inv else L.col_b_mant_inv;
+            const max_inv = if (which == 0) L.col_a_max_inv else L.col_b_max_inv;
+            const gap = if (which == 0) L.col_a_gap else L.col_b_gap;
+            const is_zero = if (which == 0) L.col_a_is_zero else L.col_b_is_zero;
+            const is_inf = if (which == 0) L.col_a_is_inf else L.col_b_is_inf;
+            const is_nan = if (which == 0) L.col_a_is_nan else L.col_b_is_nan;
+            const is_normal = if (which == 0) L.col_a_is_normal else L.col_b_is_normal;
+            const sig_eff = if (which == 0) L.col_a_sig_eff else L.col_b_sig_eff;
+            const exp_eff = if (which == 0) L.col_a_exp_eff else L.col_b_exp_eff;
+
+            const is_zero_v: u64 = if (p.exponent == 0 and p.mantissa == 0) 1 else 0;
+            const is_inf_v: u64 = if (p.exponent == f.emax() and p.mantissa == 0) 1 else 0;
+            const is_nan_v: u64 = if (p.exponent == f.emax() and p.mantissa != 0) 1 else 0;
+            const is_normal_v: u64 = if (p.exponent != 0 and p.exponent != f.emax()) 1 else 0;
+            const zero_v: u64 = if (p.exponent == 0) 1 else 0;
+            const mant_zero_v: u64 = if (p.mantissa == 0) 1 else 0;
+            const max_v: u64 = if (p.exponent == f.emax()) 1 else 0;
+            const inv_or_zero = func: {
+                const v = if (p.exponent == 0) 0 else p.exponent;
+                if (v == 0) break :func Goldilocks.zero;
+                break :func Goldilocks.fromU64(v).inv() catch unreachable;
+            };
+            const m_inv = if (p.mantissa == 0) Goldilocks.zero else Goldilocks.fromU64(p.mantissa).inv() catch unreachable;
+            const g_inv = if (f.emax() == p.exponent) Goldilocks.zero else Goldilocks.fromU64(f.emax() - p.exponent).inv() catch unreachable;
+
+            set(cols, mant_val, r, @intCast(p.mantissa));
+            set(cols, exp_zero, r, zero_v);
+            set(cols, mant_zero, r, mant_zero_v);
+            set(cols, exp_max, r, max_v);
+            set(cols, zero_inv, r, inv_or_zero.toU64());
+            set(cols, mant_inv, r, m_inv.toU64());
+            set(cols, max_inv, r, g_inv.toU64());
+            set(cols, gap, r, @intCast(f.emax() - p.exponent));
+            set(cols, is_zero, r, is_zero_v);
+            set(cols, is_inf, r, is_inf_v);
+            set(cols, is_nan, r, is_nan_v);
+            set(cols, is_normal, r, is_normal_v);
+            set(cols, sig_eff, r, if (is_normal_v == 1) a_sig_or_b_sig(p, f) else f.mantImplicit());
+            set(cols, exp_eff, r, if (is_normal_v == 1) p.exponent else @as(u64, @intCast(f.bias)));
+        }
+
         cols[L.col_product][r] = Fp2.re(Goldilocks.fromU64(product));
         trace.writeBits(L.col_p_bits, product, f.productBits(), r);
 
@@ -751,23 +1125,65 @@ pub fn buildTrace(
         const diff: u64 = @intCast(@mod(diff_signed, @as(i64, @intCast(Goldilocks.p))));
         cols[L.col_diff][r] = Fp2.re(Goldilocks.fromU64(diff));
         cols[L.col_not_overflow][r] = Fp2.re(Goldilocks.fromU64(1 - overflow));
-        const d0: u64 = @intCast(@mod(@as(i64, @intCast(pa.exponent)) +
-            @as(i64, @intCast(pb.exponent)) +
+        set(cols, L.col_path_on, r, both_normal_row * (1 - overflow));
+        // For a special row the gated equation above says nothing about
+        // d0, so the witness points it at the ANSWER's exponent: that is
+        // what makes the clamp below hold with the overflow flag at zero.
+        const arithmetic_d0: u64 = @intCast(@mod(@as(i64, @intCast(a_exp_eff)) +
+            @as(i64, @intCast(b_exp_eff)) +
             @as(i64, @intCast(f.keptLow())) +
             @as(i64, @intCast(norm)) + @as(i64, @intCast(carry)) -
             @as(i64, @intCast(@as(u16, f.bias) + @as(u16, f.mant_bits))), @as(i64, @intCast(Goldilocks.p))));
+        const d0: u64 = both_normal_row * arithmetic_d0 + (1 - both_normal_row) * pc.exponent;
         cols[L.col_d0][r] = Fp2.re(Goldilocks.fromU64(d0));
         const d0_gap: u64 = @intCast(@mod(@as(i64, @intCast(f.emax())) - @as(i64, @intCast(d0)), @as(i64, @intCast(Goldilocks.p))));
         cols[L.col_d0_gap][r] = Fp2.re(Goldilocks.fromU64(d0_gap));
         const c_exp_val: u64 = pc.exponent;
         cols[L.col_c_exp_val][r] = Fp2.re(Goldilocks.fromU64(c_exp_val));
         cols[L.col_c_mant_val][r] = Fp2.re(Goldilocks.fromU64(pc.mantissa));
-        const gap: u64 = f.emax() - c_exp_val;
-        cols[L.col_exp_gap][r] = Fp2.re(Goldilocks.fromU64(gap));
-        cols[L.col_exp_gap_inv][r] = Fp2.re(
-            if (gap == 0) Goldilocks.zero else Goldilocks.fromU64(gap).inv() catch unreachable,
-        );
         cols[L.col_overflow][r] = Fp2.re(Goldilocks.fromU64(overflow));
+
+        // Which answer, and the selected bits. The reference already knows
+        // it, so the class is read off its decomposition rather than
+        // recomputed: that keeps the AIR and the reference from silently
+        // disagreeing about the class, which would show up as a failed
+        // proof rather than a passing one.
+        const da = float_ref.decompose(f, a);
+        const db = float_ref.decompose(f, b);
+        const a_zero: u64 = if (da.special == .zero) 1 else 0;
+        const b_zero: u64 = if (db.special == .zero) 1 else 0;
+        const a_inf: u64 = if (da.special == .inf) 1 else 0;
+        const b_inf: u64 = if (db.special == .inf) 1 else 0;
+        const nan_any: u64 = if (da.special == .nan or db.special == .nan) 1 else 0;
+        const bad_pair: u64 = if ((a_inf == 1 and b_zero == 1) or (b_inf == 1 and a_zero == 1)) 1 else 0;
+        const s_nan: u64 = if (nan_any == 1 or bad_pair == 1) 1 else 0;
+        const s_inf: u64 = if (s_nan == 0 and (a_inf == 1 or b_inf == 1)) 1 else 0;
+        const s_zero: u64 = if (s_nan == 0 and bad_pair == 0 and (a_zero == 1 or b_zero == 1)) 1 else 0;
+        const both_normal: u64 = if (da.special == .finite and db.special == .finite) 1 else 0;
+        set(cols, L.col_nan_any, r, nan_any);
+        set(cols, L.col_bad_pair, r, bad_pair);
+        set(cols, L.col_s_nan, r, s_nan);
+        set(cols, L.col_s_inf, r, s_inf);
+        set(cols, L.col_s_zero, r, s_zero);
+        set(cols, L.col_s_normal, r, both_normal);
+
+        // The answer's bits. The arithmetic path's bits are the normal
+        // case's answer; the selector picks between them and the three
+        // special patterns, whose sign is the XOR of the input signs and
+        // whose NaN sign is zero.
+        const sign_xor: u64 = @as(u64, pa.sign) ^ @as(u64, pb.sign);
+        const nan_top: u16 = @intCast((@as(u32, 1) << @intCast(f.mant_bits - 1)));
+        for (0..L.width) |i| {
+            const d: u16 = @intCast(i);
+            const is_sign = d == L.width - 1;
+            const is_exp = d >= f.mant_bits and d < f.mant_bits + f.exp_bits;
+            const is_nan_mant = !is_sign and !is_exp and d == f.mant_bits - 1;
+            const normal_bit: u64 = if ((expected >> @intCast(d)) & 1 == 1) 1 else 0;
+            const zero_bit: u64 = if (is_sign) sign_xor else 0;
+            const inf_bit: u64 = if (is_sign) sign_xor else if (is_exp) 1 else 0;
+            const nan_bit: u64 = if (is_exp) 1 else if (is_nan_mant and nan_top != 0) 1 else 0;
+            set(cols, L.col_out + d, r, both_normal * normal_bit + s_zero * zero_bit + s_inf * inf_bit + s_nan * nan_bit);
+        }
     }
     return trace;
 }

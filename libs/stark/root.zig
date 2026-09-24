@@ -414,8 +414,14 @@ fn recompose(opening: Opening, system: System, alphas: []const Fp2) Fp2 {
 
 /// Upper bound on composed constraints per AIR, so `verify` can keep the
 /// Fiat-Shamir alphas in a fixed stack array instead of allocating. It
-/// bounds the verifier's own AIR size, never a prover-supplied value.
-pub const max_composed_constraints: usize = 1024;
+/// bounds the verifier's own AIR size, never a prover-supplied value, so
+/// raising it is a resource decision and never a soundness one.
+///
+/// It was 1024 while the float multiply cost 108 per row, so eight rows
+/// fitted exactly. The classify-and-select multiply costs 163 per row and
+/// the subnormal result will cost more, so the guard moves to 4096: the
+/// largest legitimate system here is 8 rows of the float AIR.
+pub const max_composed_constraints: usize = 4096;
 
 pub fn verify(
     transcript: *Transcript,

@@ -28,7 +28,7 @@ const Fp2 = stark.Fp2;
 const rows: usize = 8;
 
 /// The AIR binds the format structurally — a binary16 system has 104
-/// columns and 118 constraints per row and will not verify against a
+/// columns and 163 constraints per row and will not verify against a
 /// bfloat16 one — so the label does not have to name the format.
 const TRANSCRIPT = "zkml.float.v1";
 
@@ -64,6 +64,94 @@ fn testPairs() [rows][2]u16 {
 }
 
 /// Pairs that stay in the S1 scope: normal x normal, normal result.
+fn checkBatch(comptime f: fmt_lib.Format, pairs: []const [2]u16) !void {
+    const a = testing.allocator;
+    const L = air.Layout(f);
+    var trace = try air.buildTrace(a, pairs, f);
+    defer trace.deinit(a);
+    for (pairs, 0..) |pair, r| {
+        const expected = try float_ref.multiply(f, pair[0], pair[1]);
+        var got: u16 = 0;
+        for (0..f.byteWidth()) |i| {
+            if (trace.columns[L.col_c_bits + @as(u16, @intCast(i))][r].a.isZero()) continue;
+            got |= @as(u16, 1) << @intCast(i);
+        }
+        if (got != expected) {
+            std.debug.print("{s}: {x} · {x} gave {x}, the reference says {x}\n", .{ f.name, pair[0], pair[1], got, expected });
+            return error.ReferenceMismatch;
+        }
+    }
+    var sys = try air.buildSystem(a, trace.rows, f);
+    defer sys.deinit();
+    for (sys.system().constraints) |c| {
+        for (0..trace.rows) |r| {
+            if (evalRow(c, trace.columns, r).isZero()) continue;
+            std.debug.print("{s}: {x} · {x}: \"{s}\" does not vanish on row {d}\n", .{ f.name, pairs[r][0], pairs[r][1], c.name, r });
+            return error.WitnessInconsistent;
+        }
+    }
+}
+
+fn sweepFormat(comptime f: fmt_lib.Format) !usize {
+    const mid: u16 = @intCast(f.bias);
+    const mants = [_]u16{ 0, 1, f.mantImplicit() / 4, f.mantImplicit() / 2, 3 * f.mantImplicit() / 4, f.mantImplicit() - 2, f.mantImplicit() - 1 };
+    // 0 and 1 are the zero field and the min normal, emax the infinite
+    // field: with those in the window the sweep crosses every input class.
+    const exps = [_]u16{ 0, 1, mid - 3, mid - 1, mid, mid + 1, mid + 2, f.e_normal_max() - 1, f.e_normal_max() };
+    var batch: [8][2]u16 = undefined;
+    var n: usize = 0;
+    var checked: usize = 0;
+    for (exps) |ea| {
+        for (exps) |eb| {
+            for (mants) |ma| {
+                for (mants) |mb| {
+                    const pa_bits = f.pack(.{ .sign = 0, .exponent = ea, .mantissa = ma });
+                    const pb_bits = f.pack(.{ .sign = if (ma == 0) 1 else 0, .exponent = eb, .mantissa = mb });
+                    const pa = f.parts(pa_bits);
+                    const pb = f.parts(pb_bits);
+                    // Skip exactly what buildTrace refuses, word for word:
+                    // a subnormal INPUT in either position, a subnormal
+                    // result, and the underflow of two normal operands to
+                    // zero. A zero result from a zero operand is IN scope,
+                    // and so are infinity and NaN.
+                    if ((pa.exponent == 0 and pa.mantissa != 0) or
+                        (pb.exponent == 0 and pb.mantissa != 0)) continue;
+                    const product = float_ref.multiply(f, pa_bits, pb_bits) catch continue;
+                    const pp = f.parts(product);
+                    const inputs_normal = pa.exponent != 0 and pa.exponent != f.emax() and
+                        pb.exponent != 0 and pb.exponent != f.emax();
+                    if (inputs_normal and air.arithmeticExponent(f, pa_bits, pb_bits) <= 0) continue;
+                    if (pp.exponent == 0 and pp.mantissa != 0) continue;
+                    batch[n] = .{ pa_bits, pb_bits };
+                    n += 1;
+                    if (n < batch.len) continue;
+                    try checkBatch(f, &batch);
+                    checked += n;
+                    n = 0;
+                }
+            }
+        }
+    }
+    if (n > 0) {
+        try checkBatch(f, batch[0..n]);
+        checked += n;
+    }
+    return checked;
+}
+
+fn evalRow(c: air.Constraint, columns: [][]Fp2, r: usize) Fp2 {
+    var acc = Fp2.zero;
+    for (c.terms) |t| {
+        var prod = t.coefficient;
+        for (t.factors) |f| switch (f) {
+            .column => |col| prod = prod.mul(columns[col.index][r]),
+            .constant => |k| prod = prod.mul(k),
+        };
+        acc = acc.add(prod);
+    }
+    return acc;
+}
+
 fn supportedPairs() [rows][2]u16 {
     return .{
         .{ 0x3C00, 0x3E00 },
@@ -94,7 +182,7 @@ fn proveAndVerify(allocator: std.mem.Allocator, trace: *const air.Trace) !void {
     try testing.expect(try stark.verify(&vt, &proof, sys2.system(), CONFIG));
 }
 
-test "float air binary16: 118 constraints per multiply, degree 2 throughout" {
+test "float air binary16: 163 constraints per multiply, degree 2 throughout" {
     const a = testing.allocator;
     var sys = try air.buildSystem(a, 1, F16);
     defer sys.deinit();
@@ -103,7 +191,7 @@ test "float air binary16: 118 constraints per multiply, degree 2 throughout" {
     try testing.expectEqual(@as(usize, 2), sys.system().maxDegree());
     try testing.expect(!sys.system().hasBoundary());
     // The spike's headline: the whole cost of bit-exact IEEE-754 rounding.
-    try testing.expectEqual(@as(usize, 118), sys.system().composedCount());
+    try testing.expectEqual(@as(usize, 163), sys.system().composedCount());
 }
 
 test "float air binary16: a trace of real multiplies proves and verifies" {
@@ -118,7 +206,7 @@ test "float air binary16: a trace of real multiplies proves and verifies" {
         const expected = fp16.multiply(pair[0], pair[1]) catch unreachable;
         var got: u16 = 0;
         for (0..16) |i| {
-            if (trace.columns[L16.col_c_bits + @as(u16, @intCast(i))][r].a.isZero()) continue;
+            if (trace.columns[L16.col_out + @as(u16, @intCast(i))][r].a.isZero()) continue;
             got |= @as(u16, 1) << @intCast(i);
         }
         try testing.expectEqual(expected, got);
@@ -160,8 +248,11 @@ test "float air binary16: a tampered rounding witness is rejected" {
         .{ .name = "or_sl", .col = L16.col_or_sl },
         .{ .name = "product", .col = L16.col_product },
         .{ .name = "a_sig", .col = L16.col_a_sig },
-        .{ .name = "a_exp_val", .col = L16.col_a_exp_val },
-        .{ .name = "a_exp_inv", .col = L16.col_a_exp_inv },
+        .{ .name = "a_exp_zero", .col = L16.col_a_exp_zero },
+        .{ .name = "a_mant_zero", .col = L16.col_a_mant_zero },
+        .{ .name = "a_exp_max", .col = L16.col_a_exp_max },
+        .{ .name = "a_is_normal", .col = L16.col_a_is_normal },
+        .{ .name = "a_sig_eff", .col = L16.col_a_sig_eff },
     };
 
     for (tamper) |tcase| {
@@ -192,7 +283,7 @@ test "float air binary16: a tampered output mantissa is rejected" {
     var trace = try air.buildTrace(a, &pairs, F16);
     defer trace.deinit(a);
     // One bit of the product's mantissa, which changes the rounded value.
-    trace.columns[L16.col_c_bits + 3][0] = Fp2.one;
+    trace.columns[L16.col_out + 3][0] = Fp2.one;
 
     var sys = try air.buildSystem(a, trace.rows, F16);
     defer sys.deinit();
@@ -245,7 +336,7 @@ test "float air binary16: editing an opening is rejected" {
     }, sys.system(), CONFIG);
     defer proof.deinit(a);
 
-    proof.openings[0].current[L16.col_c_bits] = Fp2.one;
+    proof.openings[0].current[L16.col_out] = Fp2.one;
 
     var vt = stark.Transcript.init(TRANSCRIPT);
     try testing.expect(!try stark.verify(&vt, &proof, sys2.system(), CONFIG));
@@ -257,7 +348,7 @@ test "float air binary16: many random normal pairs prove and verify" {
     // exercised on data it was not hand-checked against.
     var prng = std.Random.DefaultPrng.init(0xF16A11);
     const rng = prng.random();
-    // 8 rows, not 16: at 118 composed constraints per multiply, 16 rows
+    // 8 rows, not 16: at 163 composed constraints per multiply, 16 rows
     // would need 1728 alphas and trip the verifier's 1024 ceiling. That
     // arithmetic IS the cost model this spike exists to measure — a real
     // deployment composes one trace for the whole statement, not one
@@ -343,7 +434,7 @@ fn checkFormat(comptime f: fmt_lib.Format) !void {
         const expected = try float_ref.multiply(f, pair[0], pair[1]);
         var got: u16 = 0;
         for (0..f.byteWidth()) |i| {
-            if (trace.columns[L.col_c_bits + @as(u16, @intCast(i))][r].a.isZero()) continue;
+            if (trace.columns[L.col_out + @as(u16, @intCast(i))][r].a.isZero()) continue;
             got |= @as(u16, 1) << @intCast(i);
         }
         try testing.expectEqual(expected, got);
@@ -382,7 +473,7 @@ test "float air: cost follows the widths in every format" {
         try testing.expectEqual(@as(usize, 2), sys.system().maxDegree());
         try testing.expect(!sys.system().hasBoundary());
     }
-    try testing.expectEqual(@as(usize, 118), air.constraints_per_multiply);
+    try testing.expectEqual(@as(usize, 163), air.constraints_per_multiply);
 }
 
 const TamperCase = struct {
@@ -434,111 +525,56 @@ test "float air: out-of-scope cases are refused in every format" {
     inline for (.{ F16, fmt_lib.bfloat16, fmt_lib.fp8_e4m3, fmt_lib.fp8_e5m2 }) |f| {
         const mid: u16 = @intCast(f.bias);
         const one: u16 = f.pack(.{ .sign = 0, .exponent = mid, .mantissa = 0 });
-        const sub: u16 = f.pack(.{ .sign = 0, .exponent = 0, .mantissa = 0 });
-        const inf: u16 = f.pack(.{ .sign = 0, .exponent = f.emax(), .mantissa = 0 });
-        const nan: u16 = f.pack(.{ .sign = 0, .exponent = f.emax(), .mantissa = 1 });
+        const sub: u16 = f.pack(.{ .sign = 0, .exponent = 0, .mantissa = 1 });
+        const min_normal: u16 = f.pack(.{ .sign = 0, .exponent = 1, .mantissa = 0 });
+        // 0.75, whose product with the min normal lands subnormal.
+        const three_quarters: u16 = f.pack(.{
+            .sign = 0,
+            .exponent = @intCast(f.bias - 1),
+            .mantissa = @intCast(f.mantImplicit() / 2),
+        });
+        // Just below 1.0: the min normal times it lands IN the subnormal
+        // range, and the rounded answer is the min normal itself — a
+        // perfectly normal answer the AIR still cannot prove, because the
+        // rounding that got it there is the subnormal path. This is the
+        // pair that found the guard reading the rounded answer instead of
+        // the exact product.
+        const just_below_one: u16 = f.pack(.{
+            .sign = 0,
+            .exponent = @intCast(f.bias - 1),
+            .mantissa = @intCast(f.mantImplicit() - 1),
+        });
+        // Small enough that the min normal times it underflows all the way
+        // to zero.
+        const tiny: u16 = f.pack(.{
+            .sign = 0,
+            .exponent = @intCast(f.bias - @as(i32, f.mant_bits) - 1),
+            .mantissa = 0,
+        });
+        // Zero, infinity and NaN are IN SCOPE now, in either position. What
+        // stays out: a subnormal INPUT, a subnormal RESULT, and the
+        // UNDERFLOW of two normal operands to zero. The last two need the
+        // range reduction that is still only a design.
         const cases = [_][2]u16{
-            .{ sub, one }, // subnormal input
+            .{ sub, one },
             .{ one, sub },
-            .{ inf, one }, // infinity
-            .{ one, nan }, // NaN
+            .{ min_normal, three_quarters },
+            .{ min_normal, just_below_one },
+            .{ min_normal, tiny },
         };
-        for (cases) |pair| {
-            const one_row = [_][2]u16{pair};
-            try testing.expectError(error.UnsupportedCase, air.buildTrace(a, &one_row, f));
+        for (cases) |c| {
+            const one_pair = [_][2]u16{c};
+            try testing.expectError(
+                air.BuildTraceError.UnsupportedCase,
+                air.buildTrace(a, &one_pair, f),
+            );
         }
-        // A result that underflows to a subnormal is still out of scope:
-        // the smallest normal times itself is below half the smallest
-        // subnormal in every format here.
-        const tiny: u16 = f.pack(.{ .sign = 0, .exponent = 1, .mantissa = 0 });
-        const tiny_pair = [_][2]u16{.{ tiny, tiny }};
-        try testing.expectError(error.UnsupportedCase, air.buildTrace(a, &tiny_pair, f));
+        // And the two normal operands that DO stay in scope, so the guard
+        // is not just refusing everything with a small exponent.
+        const ok = [_][2]u16{ .{ one, one }, .{ min_normal, one } };
+        var trace = try air.buildTrace(a, &ok, f);
+        trace.deinit(a);
     }
-}
-
-// ---------------------------------------------------------------------------
-// The sweep that would have caught the sticky bug
-// ---------------------------------------------------------------------------
-
-fn evalRow(c: air.Constraint, columns: [][]Fp2, r: usize) Fp2 {
-    var acc = Fp2.zero;
-    for (c.terms) |t| {
-        var prod = t.coefficient;
-        for (t.factors) |f| switch (f) {
-            .column => |col| prod = prod.mul(columns[col.index][r]),
-            .constant => |k| prod = prod.mul(k),
-        };
-        acc = acc.add(prod);
-    }
-    return acc;
-}
-
-/// A whole batch of pairs: the trace's outputs must be the reference's
-/// answers and every constraint must vanish on every row. This needs no
-/// FRI, so it can sweep hundreds of pairs instead of eight.
-fn checkBatch(comptime f: fmt_lib.Format, pairs: []const [2]u16) !void {
-    const a = testing.allocator;
-    const L = air.Layout(f);
-    var trace = try air.buildTrace(a, pairs, f);
-    defer trace.deinit(a);
-    for (pairs, 0..) |pair, r| {
-        const expected = try float_ref.multiply(f, pair[0], pair[1]);
-        var got: u16 = 0;
-        for (0..f.byteWidth()) |i| {
-            if (trace.columns[L.col_c_bits + @as(u16, @intCast(i))][r].a.isZero()) continue;
-            got |= @as(u16, 1) << @intCast(i);
-        }
-        if (got != expected) {
-            std.debug.print("{s}: {x} · {x} gave {x}, the reference says {x}\n", .{ f.name, pair[0], pair[1], got, expected });
-            return error.ReferenceMismatch;
-        }
-    }
-    var sys = try air.buildSystem(a, trace.rows, f);
-    defer sys.deinit();
-    for (sys.system().constraints) |c| {
-        for (0..trace.rows) |r| {
-            if (evalRow(c, trace.columns, r).isZero()) continue;
-            std.debug.print("{s}: {x} · {x}: \"{s}\" does not vanish on row {d}\n", .{ f.name, pairs[r][0], pairs[r][1], c.name, r });
-            return error.WitnessInconsistent;
-        }
-    }
-}
-
-/// Sweep a window of exponents and a spread of significands, in every
-/// format. Pairs the reference itself refuses — subnormal result,
-/// overflow, NaN — are skipped: those are S2's job, not this AIR's.
-fn sweepFormat(comptime f: fmt_lib.Format) !usize {
-    const mid: u16 = @intCast(f.bias);
-    const mants = [_]u16{ 0, 1, f.mantImplicit() / 4, f.mantImplicit() / 2, 3 * f.mantImplicit() / 4, f.mantImplicit() - 2, f.mantImplicit() - 1 };
-    const exps = [_]u16{ mid - 3, mid - 1, mid, mid + 1, mid + 2, f.e_normal_max() - 1, f.e_normal_max() };
-    var batch: [8][2]u16 = undefined;
-    var n: usize = 0;
-    var checked: usize = 0;
-    for (exps) |ea| {
-        for (exps) |eb| {
-            for (mants) |ma| {
-                for (mants) |mb| {
-                    const pa = f.pack(.{ .sign = 0, .exponent = ea, .mantissa = ma });
-                    const pb = f.pack(.{ .sign = if (ma == 0) 1 else 0, .exponent = eb, .mantissa = mb });
-                    // Skip exactly what buildTrace refuses: a SUBNORMAL
-                    // result. An infinite one is in scope now.
-                    const product = float_ref.multiply(f, pa, pb) catch continue;
-                    if (f.parts(product).exponent == 0) continue;
-                    batch[n] = .{ pa, pb };
-                    n += 1;
-                    if (n < batch.len) continue;
-                    try checkBatch(f, &batch);
-                    checked += n;
-                    n = 0;
-                }
-            }
-        }
-    }
-    if (n > 0) {
-        try checkBatch(f, batch[0..n]);
-        checked += n;
-    }
-    return checked;
 }
 
 test "float air: overflow to infinity, and the attacks on it" {
@@ -560,15 +596,16 @@ test "float air: overflow to infinity, and the attacks on it" {
 
         // The flag, the gap and the mantissa are each load-bearing: break
         // them one at a time and the proof must fail. The gap's INVERSE is
-        // deliberately not in this list: when the gap is zero the identity
-        // `gap·inv = 1 − flag` reads `0·inv = 0`, which no value of inv can
-        // violate. That is the point of the pattern — the prover only owes
-        // an inverse when the value is non-zero — so a free inverse there is
-        // correct, not a hole.
+        // deliberately not in this list: the per-operand exponent gaps and
+        // their inverses. When a gap is zero the identity reads `0·inv = 0`,
+        // which no value of inv can violate. That is the point of the
+        // pattern — the prover only owes an inverse when the value is
+        // non-zero — so a free inverse there is correct, not a hole.
         const cases = [_]TamperCase{
             .{ .name = "overflow flag", .col = L.col_overflow },
             .{ .name = "not-overflow", .col = L.col_not_overflow },
-            .{ .name = "exponent gap", .col = L.col_exp_gap },
+            .{ .name = "the arithmetic path is live", .col = L.col_path_on },
+            .{ .name = "the arithmetic gap to emax", .col = L.col_d0_gap },
             .{ .name = "output mantissa value", .col = L.col_c_mant_val },
         };
         // Eight rows: the FRI config's domain is 8, and a one-row trace is
@@ -595,6 +632,90 @@ test "float air: overflow to infinity, and the attacks on it" {
         // A signed overflow keeps the XOR sign: -max · 2 is -infinity.
         const neg = [_][2]u16{.{ f.pack(.{ .sign = 1, .exponent = f.e_normal_max(), .mantissa = f.mantImplicit() - 1 }), two }};
         try checkBatch(f, &neg);
+    }
+}
+
+test "float air: every input class, and the attacks on the classifier" {
+    const a = testing.allocator;
+    inline for (.{ F16, fmt_lib.bfloat16, fmt_lib.fp8_e4m3, fmt_lib.fp8_e5m2 }) |f| {
+        const L = air.Layout(f);
+        const mid: u16 = @intCast(f.bias);
+        const zero: u16 = f.pack(.{ .sign = 0, .exponent = 0, .mantissa = 0 });
+        const neg_zero: u16 = f.pack(.{ .sign = 1, .exponent = 0, .mantissa = 0 });
+        const inf: u16 = f.pack(.{ .sign = 0, .exponent = f.emax(), .mantissa = 0 });
+        const neg_inf: u16 = f.pack(.{ .sign = 1, .exponent = f.emax(), .mantissa = 0 });
+        const nan: u16 = f.pack(.{ .sign = 0, .exponent = f.emax(), .mantissa = 1 });
+        const one: u16 = f.pack(.{ .sign = 0, .exponent = mid, .mantissa = 0 });
+        const neg_one: u16 = f.pack(.{ .sign = 1, .exponent = mid, .mantissa = 0 });
+        const three: u16 = f.pack(.{ .sign = 0, .exponent = mid + 1, .mantissa = f.mantImplicit() / 2 });
+        const classes = [_][2]u16{
+            .{ zero, one }, // 0 · x = 0
+            .{ one, zero },
+            .{ neg_zero, neg_one }, // -0 · -1 = 0, sign of a zero result
+            .{ inf, one }, // inf · x = inf
+            .{ one, inf },
+            .{ neg_inf, neg_one }, // -inf · -1 = +inf
+            .{ inf, zero }, // inf · 0 = NaN
+            .{ zero, inf },
+            .{ nan, one }, // NaN · x = NaN
+            .{ one, nan },
+            .{ inf, inf }, // and inf · inf
+            .{ neg_inf, three },
+        };
+        // All of them prove, and the sweep above checks the answers.
+        try checkBatch(f, &classes);
+
+        // Every class flag, the selection and the exhaustiveness are
+        // load-bearing: break one at a time and the proof must fail.
+        const cases = [_]TamperCase{
+            .{ .name = "a exponent is zero", .col = L.col_a_exp_zero },
+            .{ .name = "a mantissa is zero", .col = L.col_a_mant_zero },
+            .{ .name = "a exponent is all ones", .col = L.col_a_exp_max },
+            .{ .name = "a is normal", .col = L.col_a_is_normal },
+            .{ .name = "a is NaN", .col = L.col_a_is_nan },
+            .{ .name = "b is zero", .col = L.col_b_is_zero },
+            .{ .name = "b is infinity", .col = L.col_b_is_inf },
+            .{ .name = "nan_any", .col = L.col_nan_any },
+            .{ .name = "bad_pair", .col = L.col_bad_pair },
+            .{ .name = "the answer is NaN", .col = L.col_s_nan },
+            .{ .name = "the answer is infinity", .col = L.col_s_inf },
+            .{ .name = "the answer is zero", .col = L.col_s_zero },
+            .{ .name = "the answer is normal", .col = L.col_s_normal },
+            .{ .name = "a sanitised significand", .col = L.col_a_sig_eff },
+            .{ .name = "b sanitised exponent", .col = L.col_b_exp_eff },
+        };
+        // Eight rows wide, because the prover's domain is 8.
+        var rows8: [8][2]u16 = undefined;
+        for (&rows8, 0..) |*slot, i| slot.* = classes[i % classes.len];
+        for (cases) |c| {
+            var trace = try air.buildTrace(a, &rows8, f);
+            defer trace.deinit(a);
+            const before = trace.columns[c.col][0].a;
+            trace.columns[c.col][0] = if (before.isZero()) Fp2.one else Fp2.zero;
+
+            var sys = try air.buildSystem(a, trace.rows, f);
+            defer sys.deinit();
+            var pt = stark.Transcript.init(TRANSCRIPT);
+            if (stark.prove(a, &pt, .{ .rows = trace.rows, .columns = trace.columns }, sys.system(), CONFIG)) |proof| {
+                var accepted = proof;
+                accepted.deinit(a);
+                std.debug.print("{s}: a forged {s} was accepted\n", .{ f.name, c.name });
+                return error.ForgedClassAccepted;
+            } else |_| {}
+        }
+
+        // And the output bits themselves.
+        var trace = try air.buildTrace(a, &rows8, f);
+        defer trace.deinit(a);
+        trace.columns[L.col_out + 7][0] = Fp2.one;
+        var sys = try air.buildSystem(a, trace.rows, f);
+        defer sys.deinit();
+        var pt = stark.Transcript.init(TRANSCRIPT);
+        if (stark.prove(a, &pt, .{ .rows = trace.rows, .columns = trace.columns }, sys.system(), CONFIG)) |proof| {
+            var accepted = proof;
+            accepted.deinit(a);
+            return error.ForgedOutputAccepted;
+        } else |_| {}
     }
 }
 
@@ -650,4 +771,3 @@ test "float air: the rounding corners prove and verify" {
     var vt = stark.Transcript.init(TRANSCRIPT);
     try testing.expect(try stark.verify(&vt, &proof, sys.system(), CONFIG));
 }
-

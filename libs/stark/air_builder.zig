@@ -133,6 +133,20 @@ pub const Builder = struct {
         });
     }
 
+    /// A term with two factors that are already recorded — a column and a
+    /// constant, or two ranges — so a mux's fallback can ride on the same
+    /// boolean without the product becoming degree 3.
+    pub fn pairOf(self: *Builder, a: FRange, b: FRange) BuildError!FRange {
+        const first = self.factors.items.len;
+        for (self.factors.items[a.first .. a.first + a.len]) |f| {
+            try self.factors.append(self.allocator, f);
+        }
+        for (self.factors.items[b.first .. b.first + b.len]) |f| {
+            try self.factors.append(self.allocator, f);
+        }
+        return .{ .first = first, .len = a.len + b.len };
+    }
+
     /// "Either this value is zero, or it has an inverse": the field
     /// identity `x·x⁻¹ = 1` has no solution when x = 0, and `flag·x = 0`
     /// forces the zero case. Two constraints, degree 2, no range check and
