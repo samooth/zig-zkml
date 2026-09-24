@@ -102,7 +102,7 @@ fn realCase(allocator: std.mem.Allocator) !Case {
 fn boundTrace(allocator: std.mem.Allocator, case: *const Case) !struct { gemm: gemm_air.Trace, bound: quant.Trace } {
     var gemm = try gemm_air.buildTrace(allocator, case.a, case.b, case.c_true);
     errdefer gemm.deinit(allocator);
-    const bound = try quant.bindOperands(
+    const bound = try quant.Q4_0.bindOperands(
         allocator,
         &gemm,
         &case.nib_a,
@@ -115,7 +115,7 @@ fn boundTrace(allocator: std.mem.Allocator, case: *const Case) !struct { gemm: g
 
 test "quant: real Q4_K operands prove and verify with the binding" {
     const a = testing.allocator;
-    var sys = try quant.buildSystem(a, k_macs);
+    var sys = try quant.Q4_0.buildSystem(a, k_macs);
     defer sys.deinit();
 
     // The binding must actually be in the system: two range checks (1 + 4
@@ -125,7 +125,7 @@ test "quant: real Q4_K operands prove and verify with the binding" {
     // no operand pin, only `s[last] = c[last]`.
     try testing.expectEqual(@as(usize, 3 + 10 + 2 + 42), sys.system().constraints.len);
     try testing.expectEqual(@as(usize, 1), sys.system().transition_exemptions);
-    try testing.expectEqual(@as(?u16, quant.col_sign_b), sys.system().maxColumn());
+    try testing.expectEqual(@as(?u16, quant.Q4_0.column_count - 1), sys.system().maxColumn());
     // The nibble range check is quadratic; the running sum already was, so
     // the blowup requirement is unchanged.
     try testing.expectEqual(@as(usize, 2), sys.system().maxDegree());
@@ -160,14 +160,14 @@ test "quant: a padded GEMM trace is refused before binding" {
 
     try testing.expectError(
         quant.BindError.PaddedTrace,
-        quant.bindOperands(a, &gemm, &case.nib_a, &case.scale_a, &case.nib_b, &case.scale_b),
+        quant.Q4_0.bindOperands(a, &gemm, &case.nib_a, &case.scale_a, &case.nib_b, &case.scale_b),
     );
-    try testing.expectError(quant.BuildError.InvalidReductionLength, quant.buildSystem(a, 16));
+    try testing.expectError(quant.BuildError.InvalidReductionLength, quant.Q4_0.buildSystem(a, 16));
 }
 
 test "quant: a bit column that is not boolean is rejected" {
     const a = testing.allocator;
-    var sys = try quant.buildSystem(a, k_macs);
+    var sys = try quant.Q4_0.buildSystem(a, k_macs);
     defer sys.deinit();
 
     var case = try realCase(a);
@@ -180,9 +180,9 @@ test "quant: a bit column that is not boolean is rejected" {
     // so the reconstruction constraint is satisfied and ONLY the
     // booleanity constraints can catch it.
     const row: usize = 6; // raw nibble 3
-    try testing.expectEqual(@as(u8, 3), bt.bound.columns[quant.col_nib_a][row].a.toU64());
-    bt.bound.columns[quant.col_bits_a + 0][row] = Fp2.re(Goldilocks.zero.sub(Goldilocks.one));
-    bt.bound.columns[quant.col_bits_a + 1][row] = Fp2.re(Goldilocks.fromU64(2));
+    try testing.expectEqual(@as(u8, 3), bt.bound.columns[quant.Q4_0.col_q_a][row].a.toU64());
+    bt.bound.columns[quant.Q4_0.col_bits_a + 0][row] = Fp2.re(Goldilocks.zero.sub(Goldilocks.one));
+    bt.bound.columns[quant.Q4_0.col_bits_a + 1][row] = Fp2.re(Goldilocks.fromU64(2));
 
     var pt = stark.Transcript.init("zkml.quant.v1");
     try testing.expectError(
@@ -196,7 +196,7 @@ test "quant: a bit column that is not boolean is rejected" {
 
 test "quant: an operand that does not match its scale is rejected" {
     const a = testing.allocator;
-    var sys = try quant.buildSystem(a, k_macs);
+    var sys = try quant.Q4_0.buildSystem(a, k_macs);
     defer sys.deinit();
 
     var case = try realCase(a);
@@ -230,8 +230,8 @@ test "quant: a raw nibble outside [0, 15] is refused before proving" {
     var bad = case.nib_a;
     bad[2] = 16;
     try testing.expectError(
-        quant.BindError.NibbleOutOfRange,
-        quant.bindOperands(a, &gemm, &bad, &case.scale_a, &case.nib_b, &case.scale_b),
+        quant.BindError.QuantOutOfRange,
+        quant.Q4_0.bindOperands(a, &gemm, &bad, &case.scale_a, &case.nib_b, &case.scale_b),
     );
 }
 
@@ -251,13 +251,13 @@ test "quant: operands that are not the dequantization of their nibble are refuse
     for (0..k_macs) |i| wrong[i] = 0x3C01; // fp16 1.0009765625
     try testing.expectError(
         quant.BindError.InconsistentOperands,
-        quant.bindOperands(a, &gemm, &case.nib_a, &wrong, &case.nib_b, &case.scale_b),
+        quant.Q4_0.bindOperands(a, &gemm, &case.nib_a, &wrong, &case.nib_b, &case.scale_b),
     );
 }
 
 test "quant: a fabricated scale no longer proves" {
     const a = testing.allocator;
-    var sys = try quant.buildSystem(a, k_macs);
+    var sys = try quant.Q4_0.buildSystem(a, k_macs);
     defer sys.deinit();
 
     // The gap this test used to mark: a scale no fp16 could produce, with
@@ -301,7 +301,7 @@ test "quant: a fabricated scale no longer proves" {
     // the scale the fp16 pattern produces.
     try testing.expectError(
         quant.BindError.InconsistentOperands,
-        quant.bindOperands(a, &gemm, &case.nib_a, &case.scale_a, &case.nib_b, &case.scale_b),
+        quant.Q4_0.bindOperands(a, &gemm, &case.nib_a, &case.scale_a, &case.nib_b, &case.scale_b),
     );
 
     // And an fp16 that is not a usable q4.22 scale is refused outright.
@@ -317,25 +317,25 @@ test "quant: a fabricated scale no longer proves" {
     }
     try testing.expectError(
         quant.BindError.BadScale,
-        quant.bindOperands(a, &gemm2, &case.nib_a, &subnormal, &case.nib_b, &case.scale_b),
+        quant.Q4_0.bindOperands(a, &gemm2, &case.nib_a, &subnormal, &case.nib_b, &case.scale_b),
     );
     var gemm3 = try gemm_air.buildTrace(a, case.a, case.b, case.c_true);
     defer gemm3.deinit(a);
     try testing.expectError(
         quant.BindError.BadScale,
-        quant.bindOperands(a, &gemm3, &case.nib_a, &too_big, &case.nib_b, &case.scale_b),
+        quant.Q4_0.bindOperands(a, &gemm3, &case.nib_a, &too_big, &case.nib_b, &case.scale_b),
     );
     var gemm4 = try gemm_air.buildTrace(a, case.a, case.b, case.c_true);
     defer gemm4.deinit(a);
     try testing.expectError(
         quant.BindError.BadScale,
-        quant.bindOperands(a, &gemm4, &case.nib_a, &infinite, &case.nib_b, &case.scale_b),
+        quant.Q4_0.bindOperands(a, &gemm4, &case.nib_a, &infinite, &case.nib_b, &case.scale_b),
     );
 }
 
 test "quant: tampering with a scale's provenance witness is rejected" {
     const a = testing.allocator;
-    var sys = try quant.buildSystem(a, k_macs);
+    var sys = try quant.Q4_0.buildSystem(a, k_macs);
     defer sys.deinit();
     var case = try realCase(a);
     defer case.deinit(a);
@@ -358,13 +358,13 @@ test "quant: tampering with a scale's provenance witness is rejected" {
     // (1024 + m)·2^s the selector and mantissa produce. This is the
     // attack the gadget exists to stop, and it is now caught by the AIR
     // rather than by the binder refusing to build the trace.
-    const bad = try a.dupe(Fp2, bt.bound.columns[quant.col_scale_a]);
+    const bad = try a.dupe(Fp2, bt.bound.columns[quant.Q4_0.col_scale_a]);
     defer a.free(bad);
     bad[0] = bad[0].add(Fp2.one);
-    const cols = try a.alloc([]const Fp2, quant.column_count);
+    const cols = try a.alloc([]const Fp2, quant.Q4_0.column_count);
     defer a.free(cols);
     for (bt.bound.columns, 0..) |c, i| cols[i] = c;
-    cols[quant.col_scale_a] = bad;
+    cols[quant.Q4_0.col_scale_a] = bad;
 
     var pt2 = stark.Transcript.init("zkml.quant.v1");
     try testing.expectError(
@@ -384,7 +384,7 @@ test "quant: a 4095-MAC reduction (4096 rows) proves and verifies" {
     // the FFT, so this both passes and stops dominating verify time.
     const a = testing.allocator;
     const k: usize = 4095;
-    var sys = try quant.buildSystem(a, k);
+    var sys = try quant.Q4_0.buildSystem(a, k);
     defer sys.deinit();
 
     const av = try a.alloc(Goldilocks, k);
@@ -418,7 +418,7 @@ test "quant: a 4095-MAC reduction (4096 rows) proves and verifies" {
 
     var gemm = try gemm_air.buildTrace(a, av, bv, c);
     defer gemm.deinit(a);
-    var bound = try quant.bindOperands(a, &gemm, nibs_a, sc_a, nibs_b, sc_b);
+    var bound = try quant.Q4_0.bindOperands(a, &gemm, nibs_a, sc_a, nibs_b, sc_b);
     defer bound.deinit(a);
     try testing.expectEqual(@as(usize, 4096), bound.rows);
 
@@ -447,7 +447,7 @@ test "quant: a 4095-MAC reduction (4096 rows) proves and verifies" {
 
 test "quant: no malformed fp16 can reach a provable witness" {
     const a = testing.allocator;
-    var sys = try quant.buildSystem(a, k_macs);
+    var sys = try quant.Q4_0.buildSystem(a, k_macs);
     defer sys.deinit();
 
     // Every one of these must fail at the fp16 seam. The point is not the
@@ -482,7 +482,7 @@ test "quant: no malformed fp16 can reach a provable witness" {
 
     var trace = try gemm_air.buildTrace(a, case.a, case.b, case.c_true);
     defer trace.deinit(a);
-    var bound = try quant.bindOperands(a, &trace, &case.nib_a, &case.scale_a, &case.nib_b, &case.scale_b);
+    var bound = try quant.Q4_0.bindOperands(a, &trace, &case.nib_a, &case.scale_a, &case.nib_b, &case.scale_b);
     defer bound.deinit(a);
 
     var pt = stark.Transcript.init("zkml.quant.v1");
@@ -494,4 +494,48 @@ test "quant: no malformed fp16 can reach a provable witness" {
 
     var vt = stark.Transcript.init("zkml.quant.v1");
     try testing.expect(try stark.verify(&vt, &proof, sys.system(), CONFIG));
+}
+
+test "quant: the width template lays out columns without overlap" {
+    // The provenance gadget's columns start after the quant and bit
+    // columns, and the two gadgets' blocks do not touch. Getting this
+    // wrong is silent — the constraints still evaluate, they just read the
+    // wrong columns, which is how a gadget ends up attesting nothing.
+    const B = quant.Q4_0;
+    try testing.expectEqual(@as(u16, 6), B.col_bits_a);
+    try testing.expectEqual(@as(u16, 10), B.col_bits_b);
+    try testing.expectEqual(@as(u16, 14), B.col_scale_a);
+    try testing.expectEqual(@as(u16, 15), B.col_scale_b);
+    // Bits and scale come first, then the gadgets.
+    try testing.expect(B.col_bits_b + B.width > B.col_bits_b);
+    try testing.expect(B.col_scale_a > B.col_bits_b + B.width - 1);
+    try testing.expectEqual(@as(usize, 74), B.column_count);
+    // The gadget's own layout, checked against the declared column count.
+    try testing.expectEqual(@as(u16, 16), B.gadget_a.mant_base);
+    try testing.expectEqual(@as(u16, 26), B.gadget_a.sel_base);
+    try testing.expectEqual(@as(u16, 42), B.gadget_a.shift_col);
+    try testing.expectEqual(@as(u16, 45), B.gadget_b.mant_base);
+    try testing.expectEqual(@as(u16, 55), B.gadget_b.sel_base);
+    try testing.expectEqual(@as(u16, 71), B.gadget_b.shift_col);
+    try testing.expectEqual(B.column_count - 1, B.gadget_b.sign_col);
+    try testing.expect(B.gadget_a.mant_base > B.col_scale_b);
+    try testing.expect(B.gadget_b.mant_base > B.gadget_a.sign_col);
+}
+
+test "quant: Q8_0 proves the representation but not the scale's origin" {
+    // Q8_0's scale is not an fp16 in q4.22, so the provenance gadget would
+    // attest a convention Q8_0 does not use. It runs without, and that gap
+    // is deliberate: the representation is pinned, the scale's origin is
+    // not. This test exists so the gap stays visible.
+    const B = quant.Q8_0;
+    try testing.expectEqual(@as(u8, 8), B.width);
+    // No gadget columns: the layout stops after the two scales.
+    try testing.expectEqual(@as(usize, B.col_scale_b + 1), B.column_count);
+
+    var sys = try B.buildSystem(testing.allocator, k_macs);
+    defer sys.deinit();
+    // 3 GEMM + 2 range checks x (1 + 8) + 2 dequant equations, and no
+    // provenance gadget.
+    try testing.expectEqual(@as(usize, 3 + 2 * 9 + 2), sys.system().constraints.len);
+    try testing.expectEqual(@as(?u16, B.col_scale_b), sys.system().maxColumn());
 }

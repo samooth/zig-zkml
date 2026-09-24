@@ -164,13 +164,13 @@ fn buildData(allocator: std.mem.Allocator, k: usize) !Data {
 }
 
 fn benchPerMac(allocator: std.mem.Allocator, io: std.Io, data: *const Data) !Stats {
-    var sys = try quant.buildSystem(allocator, data.a.len);
+    var sys = try quant.Q4_0.buildSystem(allocator, data.a.len);
     defer sys.deinit();
     const system = sys.system();
 
     var gemm = try gemm_air.buildTrace(allocator, data.a, data.b, data.c);
     defer gemm.deinit(allocator);
-    var bound = try quant.bindOperands(
+    var bound = try quant.Q4_0.bindOperands(
         allocator,
         &gemm,
         data.nib_a,
