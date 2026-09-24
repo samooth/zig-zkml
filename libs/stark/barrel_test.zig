@@ -37,39 +37,58 @@ const CONFIG: stark.Config = blk: {
 /// The gadget's own column layout, so it can be built and proved alone.
 fn Layout(comptime width: u16, comptime amount_bits: u16) type {
     return struct {
+        const out_base: u16 = width + amount_bits;
+        // column_cost needs a Config to measure, and a Config needs the cost
+        // to place its own outputs, so the measuring call gets a dummy one:
+        // only amount_bits and width matter for the size.
+        const cost: usize = barrel.column_cost(.{
+            .in_base = 0,
+            .width = width,
+            .amount_base = width,
+            .amount_bits = amount_bits,
+            .out_base = out_base,
+            .sticky_col = out_base,
+            .round_col = out_base,
+            .below_col = out_base,
+            .round_bits = true,
+        });
         const cfg: barrel.Config = .{
             .in_base = 0,
             .width = width,
             .amount_base = width,
             .amount_bits = amount_bits,
-            .out_base = width + amount_bits,
-            .sticky_col = width + amount_bits + barrel.column_cost(.{
-                .in_base = 0,
-                .width = width,
-                .amount_base = width,
-                .amount_bits = amount_bits,
-                .out_base = width + amount_bits,
-                .sticky_col = width + amount_bits,
-            }) - 1,
+            .out_base = out_base,
+            // column_cost ends with the caller's three output columns, in
+            // the order they appear in Config.
+            .sticky_col = out_base + @as(u16, @intCast(cost)) - 3,
+            .round_col = out_base + @as(u16, @intCast(cost)) - 2,
+            .below_col = out_base + @as(u16, @intCast(cost)) - 1,
+            .round_bits = true,
         };
         pub const col_in: u16 = cfg.in_base;
         pub const col_amount: u16 = cfg.amount_base;
         pub const col_out: u16 = cfg.out_base;
-        pub const column_count: usize = cfg.sticky_col + 1;
+        pub const column_count: usize = out_base + cost;
     };
 }
 
 /// The reference: shift the vector right, remember whether anything was
 /// lost off the bottom.
-pub const Shifted = struct { value: u64, sticky: u64 };
+pub const Shifted = struct { value: u64, sticky: u64, round: u64, below: u64 };
 
 pub fn shiftRight(value: u64, width: u16, amount: u16) Shifted {
     const mask = if (width >= 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(width)) - 1;
     const v = value & mask;
-    if (amount >= width) return .{ .value = 0, .sticky = if (v == 0) 0 else 1 };
+    // The round bit is the LAST bit the shift drops; the sticky a rounding
+    // step wants is everything STRICTLY below it, which is not the same as
+    // the OR of everything lost.
+    const round: u64 = if (amount == 0) 0 else (v >> @intCast(amount - 1)) & 1;
+    const below_mask: u64 = if (amount <= 1) 0 else (@as(u64, 1) << @intCast(amount - 1)) - 1;
+    const below: u64 = if (v & below_mask == 0) 0 else 1;
+    if (amount >= width) return .{ .value = 0, .sticky = if (v == 0) 0 else 1, .round = round, .below = below };
     const out = (v >> @intCast(amount)) & mask;
     const lost = v & ((@as(u64, 1) << @intCast(amount)) - 1);
-    return .{ .value = out, .sticky = if (lost == 0) 0 else 1 };
+    return .{ .value = out, .sticky = if (lost == 0) 0 else 1, .round = round, .below = below };
 }
 
 fn evalRow(c: bld.Constraint, columns: [][]Fp2, r: usize) Fp2 {
@@ -106,6 +125,8 @@ fn buildTrace(comptime width: u16, comptime amount_bits: u16, allocator: std.mem
         const bases: barrel.Bases = .of(L.cfg);
         var current: u64 = value & mask;
         var sticky: u64 = 0;
+        var round_bit: u64 = 0;
+        var below: u64 = 0;
         var k: usize = 0;
         while (k < amount_bits) : (k += 1) {
             const stage: u16 = @intCast(k);
@@ -121,11 +142,28 @@ fn buildTrace(comptime width: u16, comptime amount_bits: u16, allocator: std.mem
                 trace.columns[bases.prefixOf(L.cfg, stage) + @as(u16, @intCast(j))][r] =
                     Fp2.re(bld.Goldilocks.fromU64(prefix_or));
             }
+            // The block this stage drops is the low `distance` bits of the
+            // vector as it stands NOW, so its top and its rest have to be
+            // read before the shift.
+            const block_top: u64 = (current >> @intCast(distance - 1)) & 1;
+            const rest_mask: u64 = if (distance >= 2) (@as(u64, 1) << @intCast(distance - 1)) - 1 else 0;
+            const rest: u64 = if (current & rest_mask == 0) 0 else 1;
+            // Everything dropped before this stage, counting the previous
+            // stage's round bit: that bit stops being the round bit as soon
+            // as this stage moves.
+            const prev_all: u64 = if (round_bit == 1 or below == 1) 1 else 0;
+            const tail: u64 = if (prev_all == 1 or rest == 1) 1 else 0;
+            trace.columns[bases.prevAllOf(stage)][r] = Fp2.re(bld.Goldilocks.fromU64(prev_all));
+            trace.columns[bases.tailOf(stage)][r] = Fp2.re(bld.Goldilocks.fromU64(tail));
             if (bit == 1) {
+                round_bit = block_top;
+                below = tail;
                 const lost = current & ((@as(u64, 1) << @intCast(distance)) - 1);
                 if (lost != 0) sticky = 1;
                 current >>= @intCast(distance);
             }
+            trace.columns[bases.roundOf(L.cfg, stage)][r] = Fp2.re(bld.Goldilocks.fromU64(round_bit));
+            trace.columns[bases.belowOf(L.cfg, stage)][r] = Fp2.re(bld.Goldilocks.fromU64(below));
             const flag: u64 = if (bit == 1) prefix_or else 0;
             trace.columns[bases.flagOf(stage)][r] = Fp2.re(bld.Goldilocks.fromU64(flag));
 
@@ -151,8 +189,14 @@ fn checkBatch(comptime width: u16, comptime amount_bits: u16, values: []const u6
             got |= @as(u64, 1) << @intCast(i);
         }
         const got_sticky = trace.columns[L.cfg.sticky_col][r].a.toU64();
-        if (got != want.value or got_sticky != want.sticky) {
-            std.debug.print("shift {x} by {d}: got {x}/{d}, want {x}/{d}\n", .{ value, amount, got, got_sticky, want.value, want.sticky });
+        const got_round = trace.columns[L.cfg.round_col][r].a.toU64();
+        const got_below = trace.columns[L.cfg.below_col][r].a.toU64();
+        if (got != want.value or got_sticky != want.sticky or
+            got_round != want.round or got_below != want.below)
+        {
+            std.debug.print("shift {x} by {d}: got {x} sticky {d} round {d} below {d}, want {x} sticky {d} round {d} below {d}\n", .{
+                value, amount, got, got_sticky, got_round, got_below, want.value, want.sticky, want.round, want.below,
+            });
             return error.ShiftMismatch;
         }
     }
@@ -215,6 +259,37 @@ test "barrel: wider shift amounts and narrower vectors" {
     _ = try sweep(12, 4);
     _ = try sweep(49, 6);
     _ = try sweep(8, 2);
+}
+
+test "barrel: the round-bit chains cost 4 constraints per stage" {
+    const a = testing.allocator;
+    // 25 bits with a 4-bit amount: four stages, and stage 0 emits three
+    // chains instead of four because its prev_all is a forced zero, so the
+    // chains add 15 to the 152 the shift alone costs. Pinned because the
+    // roadmap quotes these numbers as a cost model.
+    var sys = try buildSystem(25, 4, a, 1);
+    defer sys.deinit();
+    try testing.expectEqual(@as(usize, 167), sys.system().composedCount());
+    try testing.expectEqual(@as(usize, 2), sys.system().maxDegree());
+    try testing.expect(!sys.system().hasBoundary());
+
+    // And without the chains the same shift is 152, which is the number the
+    // roadmap carried before the extension existed.
+    const L = Layout(25, 4);
+    var plain = Builder.init(a);
+    for (0..25) |i| try plain.boolean("input bit is boolean", L.col_in + @as(u16, @intCast(i)));
+    try barrel.build(&plain, .{
+        .in_base = L.col_in,
+        .width = 25,
+        .amount_base = L.col_amount,
+        .amount_bits = 4,
+        .out_base = L.col_out,
+        .sticky_col = 0,
+        .round_col = 0,
+        .below_col = 0,
+    });
+    try testing.expectEqual(@as(usize, 152), plain.count());
+    plain.deinit();
 }
 
 test "barrel: it proves, verifies, and rejects a forged shift" {

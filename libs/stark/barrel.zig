@@ -51,6 +51,16 @@ pub const Config = struct {
     /// Column for the OR of everything shifted out, and the one before it
     /// in the layout if the caller wants a running chain.
     sticky_col: u16,
+    /// Column for the LAST bit shifted out — the round bit of a rounding
+    /// step. Only built when `round_bits` is set.
+    round_col: u16,
+    /// Column for the OR of everything shifted out STRICTLY below the round
+    /// bit, which is the sticky a rounding step actually wants. Only built
+    /// when `round_bits` is set.
+    below_col: u16,
+    /// Whether to build the round-bit chains. Off for callers that only
+    /// want the shifted vector and the OR of everything lost.
+    round_bits: bool = false,
 };
 
 /// Columns a Config needs, beyond the input and the amount: the output
@@ -61,7 +71,11 @@ pub fn column_cost(cfg: Config) usize {
     const stages: u16 = cfg.amount_bits;
     // One vector per stage, the prefix ORs, one flag per stage, the
     // internal sticky chain, and the caller's own sticky column.
-    return cfg.width * stages + prefixTotal(cfg) + stages + (stages - 1) + 1;
+    const base = cfg.width * stages + prefixTotal(cfg) + stages + (stages - 1) + 1;
+    // With round_bits: four running columns per stage (round, prev_all,
+    // tail, below) and the caller's own two.
+    if (!cfg.round_bits) return base;
+    return base + 4 * stages + 2;
 }
 
 /// Where the gadget's own columns sit inside a caller's layout. Exposed
@@ -71,13 +85,32 @@ pub const Bases = struct {
     prefix: u16,
     flag: u16,
     sticky_chain: u16,
+    round_chain: u16,
+    prev_all_chain: u16,
+    tail_chain: u16,
+    below_chain: u16,
 
     pub fn of(comptime cfg: Config) Bases {
         const stages: u16 = cfg.amount_bits;
         const stage: u16 = cfg.out_base;
         const prefix: u16 = stage + cfg.width * stages;
         const flag: u16 = prefix + @as(u16, @intCast(prefixTotal(cfg)));
-        return .{ .stage = stage, .prefix = prefix, .flag = flag, .sticky_chain = flag + stages };
+        const sticky_chain: u16 = flag + stages;
+        // Allocated even when round_bits is off, so `of` does not depend on
+        // it; nothing reads them in that case.
+        const round_chain: u16 = sticky_chain + (stages - 1);
+        const prev_all_chain: u16 = round_chain + stages;
+        const tail_chain: u16 = prev_all_chain + stages;
+        return .{
+            .stage = stage,
+            .prefix = prefix,
+            .flag = flag,
+            .sticky_chain = sticky_chain,
+            .round_chain = round_chain,
+            .prev_all_chain = prev_all_chain,
+            .tail_chain = tail_chain,
+            .below_chain = tail_chain + stages,
+        };
     }
 
     /// The vector after stage k, where stage 0 is the first shift applied
@@ -98,6 +131,24 @@ pub const Bases = struct {
     /// caller's column, because that is the answer; the rest chain.
     pub fn stickyOf(self: Bases, cfg: Config, k: u16) u16 {
         return if (k == cfg.amount_bits - 1) cfg.sticky_col else self.sticky_chain + k;
+    }
+
+    /// Where stage k's running round bit goes; the LAST stage writes the
+    /// caller's column, same convention as the sticky.
+    pub fn roundOf(self: Bases, cfg: Config, k: u16) u16 {
+        return if (k == cfg.amount_bits - 1) cfg.round_col else self.round_chain + k;
+    }
+
+    pub fn prevAllOf(self: Bases, k: u16) u16 {
+        return self.prev_all_chain + k;
+    }
+
+    pub fn tailOf(self: Bases, k: u16) u16 {
+        return self.tail_chain + k;
+    }
+
+    pub fn belowOf(self: Bases, cfg: Config, k: u16) u16 {
+        return if (k == cfg.amount_bits - 1) cfg.below_col else self.below_chain + k;
     }
 };
 
@@ -189,6 +240,94 @@ pub fn build(b: *Builder, comptime cfg: Config) GadgetError!void {
             .{ .factors = try b.one(flag) },
             .{ .factors = try b.pair(ctrl, prefix_or), .coefficient = bld.kNegOne },
         });
+
+        // The round bit and the sticky strictly below it — what a rounding
+        // step needs, and what the OR alone cannot give, because a right
+        // shift by s has already folded the round bit into it.
+        //
+        // A stage that shifts by `amount` drops a block of `amount` bits
+        // of ITS OWN input, so the last bit it drops sits at the fixed
+        // position amount-1, and what it drops below that is the block's
+        // prefix-OR chain minus its last element. Four running columns
+        // carry the two values across the stages that do not move:
+        //
+        //   round_k    = ctrl_k ? top_k                  : round_{k-1}
+        //   prev_all_k = round_{k-1} OR below_{k-1}                 (0 at k=0)
+        //   tail_k     = prev_all_k OR rest_k
+        //   below_k    = ctrl_k ? tail_k                  : below_{k-1}
+        //
+        // prev_all is what makes it correct rather than plausible: when a
+        // stage DOES move, the previous round bit stops being the round
+        // bit and joins the tail. Folding that OR into the mux would be
+        // degree 3, hence the extra column.
+        if (cfg.round_bits) {
+            const top: u16 = src + amount - 1;
+            const has_rest = amount >= 2;
+            const rest: u16 = prefix + amount - 2;
+            const kk: u16 = @intCast(k);
+
+            const round_out: u16 = bases.roundOf(cfg, kk);
+            const prev_all: u16 = bases.prevAllOf(kk);
+            const tail: u16 = bases.tailOf(kk);
+            const below_out: u16 = bases.belowOf(cfg, kk);
+
+            if (k == 0) {
+                try b.lin(cname("round bit is the block top when it moves", kk, 0), .composed, &.{
+                    .{ .factors = try b.one(round_out) },
+                    .{ .factors = try b.pair(ctrl, top), .coefficient = bld.kNegOne },
+                });
+                try b.lin(cname("nothing dropped before the first stage", kk, 0), .composed, &.{
+                    .{ .factors = try b.one(prev_all) },
+                });
+                if (has_rest) {
+                    try b.copy(cname("first tail is the block rest", kk, 0), tail, rest);
+                    try b.lin(cname("below-round sticky is the tail when it moves", kk, 0), .composed, &.{
+                        .{ .factors = try b.one(below_out) },
+                        .{ .factors = try b.pair(ctrl, tail), .coefficient = bld.kNegOne },
+                    });
+                } else {
+                    // A one-bit block has nothing below its round bit.
+                    try b.lin(cname("first tail is zero for a one-bit block", kk, 0), .composed, &.{
+                        .{ .factors = try b.one(tail) },
+                    });
+                    try b.lin(cname("below-round sticky is zero for a one-bit block", kk, 0), .composed, &.{
+                        .{ .factors = try b.one(below_out) },
+                    });
+                }
+                continue;
+            }
+
+            const round_prev: u16 = bases.roundOf(cfg, kk - 1);
+            const below_prev: u16 = bases.belowOf(cfg, kk - 1);
+            try b.lin(cname("round bit carried or moved", kk, 0), .composed, &.{
+                .{ .factors = try b.one(round_out) },
+                .{ .factors = try b.pair(ctrl, top), .coefficient = bld.kNegOne },
+                .{ .factors = try b.one(round_prev), .coefficient = bld.kNegOne },
+                .{ .factors = try b.pair(ctrl, round_prev) },
+            });
+            try b.lin(cname("everything dropped before this stage", kk, 0), .composed, &.{
+                .{ .factors = try b.one(prev_all) },
+                .{ .factors = try b.one(round_prev), .coefficient = bld.kNegOne },
+                .{ .factors = try b.one(below_prev), .coefficient = bld.kNegOne },
+                .{ .factors = try b.pair(round_prev, below_prev) },
+            });
+            if (has_rest) {
+                try b.lin(cname("tail absorbs the block rest", kk, 0), .composed, &.{
+                    .{ .factors = try b.one(tail) },
+                    .{ .factors = try b.one(prev_all), .coefficient = bld.kNegOne },
+                    .{ .factors = try b.one(rest), .coefficient = bld.kNegOne },
+                    .{ .factors = try b.pair(prev_all, rest) },
+                });
+            } else {
+                try b.copy(cname("tail carried, a one-bit block has no rest", kk, 0), tail, prev_all);
+            }
+            try b.lin(cname("below-round sticky carried or moved", kk, 0), .composed, &.{
+                .{ .factors = try b.one(below_out) },
+                .{ .factors = try b.pair(ctrl, tail), .coefficient = bld.kNegOne },
+                .{ .factors = try b.one(below_prev), .coefficient = bld.kNegOne },
+                .{ .factors = try b.pair(ctrl, below_prev) },
+            });
+        }
 
         // The first stage's sticky IS its flag; after that it accumulates.
         if (k == 0) {
