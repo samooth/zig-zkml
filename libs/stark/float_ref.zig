@@ -207,6 +207,133 @@ fn packSpecial(f: Format, sign: u1, which: enum { zero, inf }) u16 {
 /// The canonical NaN of a format: all-ones exponent with the mantissa's
 /// top bit set, which every IEEE-754 producer recognises and no arithmetic
 /// operation turns into a number.
+/// IEEE-754 addition, ONE rounding, for the cross-check of §3.1 in
+/// BLUE_PRINT.md: the native fast path accumulates in fp32 and the test
+/// that compares it against the proof's contract needs a reference that
+/// rounds exactly once, in the same order, per step.
+///
+/// It is a HOST reference, not an AIR. That is a measured decision, not a
+/// shortcut: proving this in the IR costs several hundred constraints per
+/// add (the alignment shift alone is a 24-bit, 7-stage barrel), and sixteen
+/// adds per row would need an alpha array two orders of magnitude larger
+/// than the verifier keeps on its stack. The contract the proof verifies is
+/// the EXACT field sum — see the cost measurement in TODO.md.
+///
+/// The same discipline as `multiply`: the exact sum is an integer, and it
+/// is rounded ONCE, at the end, into the target grid. Nothing here rounds
+/// twice, which is the bug the multiply reference had.
+pub fn add(f: Format, a: u16, b: u16) !u16 {
+    const da = decompose(f, a);
+    const db = decompose(f, b);
+    if (da.special == .nan or db.special == .nan) return canonicalNaN(f);
+    if (da.special == .inf and db.special == .inf) {
+        if (da.sign == db.sign) return packSpecial(f, 0, .inf);
+        return canonicalNaN(f); // inf + (-inf) is the invalid operation
+    }
+    if (da.special == .inf) return packSpecial(f, da.sign, .inf);
+    if (db.special == .inf) return packSpecial(f, db.sign, .inf);
+
+    // Zeros: the sign of an exact zero sum is -0 only when both are -0,
+    // and a zero plus a non-zero takes the other one's sign.
+    if (da.special == .zero and db.special == .zero) {
+        const sign: u1 = if (da.sign == 1 and db.sign == 1) 1 else 0;
+        return packSpecial(f, sign, .zero);
+    }
+    if (da.special == .zero) return b;
+    if (db.special == .zero) return a;
+
+    // Exact sum as ONE integer plus one common shift. Each operand is
+    // `significand · 2^shift`, so the common scale is the SMALLER shift and
+    // the bigger operand is scaled UP by the gap — exact, no bits lost, and
+    // no rounding yet. (Scaling the smaller one up instead, which looks
+    // equivalent, is not: the two terms would end up on different shifts
+    // and the sum would be off by the gap. The min normal plus the min
+    // subnormal is the case that says so.)
+    const sign: u1 = da.sign ^ db.sign;
+    const big = if (da.shift > db.shift) da else db;
+    const small = if (da.shift > db.shift) db else da;
+    const gap: u32 = @intCast(big.shift - small.shift);
+    // u128 cannot overflow here: significand < 2^(M+1) and gap <= 2·emax,
+    // and 2^(M+1+2·emax) is far inside 128 bits for every format.
+    const big_scaled: u128 = @as(u128, big.significand) << @intCast(gap);
+    const small_scaled: u128 = small.significand;
+    const magnitude: u128 = if (sign == 0)
+        big_scaled + small_scaled
+    else if (big_scaled >= small_scaled)
+        big_scaled - small_scaled
+    else
+        small_scaled - big_scaled;
+    if (magnitude == 0) return packSpecial(f, 0, .zero); // exact cancellation
+
+    // The sign of a SUM is the xor; the sign of a DIFFERENCE belongs to
+    // whichever operand is larger in magnitude — and "larger" here is the
+    // comparison above, not the one that picked `big` (which picks by
+    // exponent, and a subtraction can go the other way). Returning the xor
+    // unconditionally made `1+ulp + (-(2^-11 + tail))` come out as -1.0.
+    const result_sign: u1 = if (sign == 0) da.sign else if (big_scaled >= small_scaled) big.sign else small.sign;
+
+    return roundInto(f, result_sign, magnitude, small.shift);
+}
+
+/// round(m / 2^k) for k >= 0, RNE, with the sticky taken from the bits
+/// below the round bit. One rounding, at the end, always.
+fn divRoundPow2(m: u128, k: u16) u64 {
+    if (k == 0) return @intCast(m);
+    var q: u64 = @intCast(m >> @intCast(k));
+    const round_bit: u64 = @intCast((m >> @intCast(k - 1)) & 1);
+    const rest_mask: u128 = if (k <= 1) 0 else (@as(u128, 1) << @intCast(k - 1)) - 1;
+    const sticky: u64 = if (m & rest_mask == 0) 0 else 1;
+    if (round_bit == 1 and (sticky == 1 or q & 1 == 1)) q += 1;
+    return q;
+}
+
+/// Round an exact magnitude `m · 2^shift` (m's top bit set) once into the
+/// format's grid.
+fn roundInto(f: Format, sign: u1, m: u128, shift: i32) u16 {
+    std.debug.assert(m > 0);
+    const bits: u16 = 128 - @as(u16, @intCast(@clz(m)));
+    const keep: u16 = f.keptLow(); // M
+    // The field the answer lands in, before rounding. A value above the
+    // grid overflows to infinity, exactly as the multiply does.
+    const e_field: i32 = shift + @as(i32, @intCast(bits)) + f.bias - 1;
+    const max_field: i32 = if (f.has_inf_nan) @as(i32, f.emax()) - 1 else f.emax();
+    // The subnormal grid's step, and the count of steps in the exact value.
+    const sub_shift: i32 = 1 - f.bias - @as(i32, @intCast(f.mant_bits));
+    const step_shift: i32 = shift - sub_shift;
+
+    if (e_field >= 1) {
+        // NORMAL: the kept field is the top M+1 bits, and a rounding carry
+        // can push it to 2^(M+1), which is 1.0 of the next exponent.
+        const drop: u16 = @as(u16, @intCast(bits)) - 1 - keep;
+        var mant: u64 = divRoundPow2(m, drop);
+        var field: i32 = e_field;
+        if (mant == (@as(u64, 1) << @intCast(keep + 1))) {
+            mant = @as(u64, 1) << @intCast(keep);
+            field += 1;
+        }
+        if (field > max_field) return packSpecial(f, sign, .inf);
+        return f.pack(.{
+            .sign = sign,
+            .exponent = @intCast(field),
+            .mantissa = @intCast(mant - (@as(u64, 1) << @intCast(keep))),
+        });
+    }
+
+    // SUBNORMAL or zero: the count of subnormal steps, rounded ONCE. When
+    // the exact value is below the step this is a right shift, and the
+    // sticky that decides a tie has to come from the bits it discarded.
+    const count: u64 = if (step_shift >= 0) blk: {
+        const exact: u128 = m << @intCast(step_shift);
+        break :blk @intCast(exact);
+    } else divRoundPow2(m, @intCast(-step_shift));
+    if (count == 0) return packSpecial(f, sign, .zero);
+    if (count == (@as(u64, 1) << @intCast(f.mant_bits))) {
+        // Rounded all the way up: the min normal, whose mantissa is zero.
+        return f.pack(.{ .sign = sign, .exponent = 1, .mantissa = 0 });
+    }
+    return f.pack(.{ .sign = sign, .exponent = 0, .mantissa = @intCast(count) });
+}
+
 pub fn canonicalNaN(f: Format) u16 {
     return f.pack(.{
         .sign = 0,
@@ -400,4 +527,177 @@ test "float ref: roundToNearestEven still behaves" {
     try testing.expectEqual(@as(u64, 2), r.kept);
     try testing.expectEqual(@as(u1, 1), r.round_bit);
     try testing.expectEqual(@as(u1, 0), r.sticky);
+}
+
+/// One operand counted in subnormal steps: an integer part and an exact
+/// remainder over 2^k.
+const Steps = struct {
+    q: u128,
+    rem: u128,
+    k: u16,
+};
+
+fn stepsOf(d: Decomposed, sub_shift: i32) Steps {
+    const delta: i32 = d.shift - sub_shift;
+    if (delta >= 0) return .{ .q = @as(u128, d.significand) << @intCast(delta), .rem = 0, .k = 0 };
+    const k: u16 = @intCast(-delta);
+    const mask: u128 = (@as(u128, 1) << @intCast(k)) - 1;
+    return .{
+        .q = @as(u128, d.significand) >> @intCast(k),
+        .rem = @as(u128, d.significand) & mask,
+        .k = k,
+    };
+}
+
+/// An independent second opinion for the finite non-zero case, written the
+/// other way round. `add` normalises the exact magnitude and rounds it once;
+/// this one counts SUBNORMAL STEPS — each operand as an integer part plus
+/// an exact remainder over a power of two — adds those, and rounds the
+/// combined fraction ONCE. The two disagree if either rounds twice, which
+/// is how the multiply reference's double-rounding bug was found.
+fn addBySteps(f: Format, a: u16, b: u16) !u16 {
+    const da = decompose(f, a);
+    const db = decompose(f, b);
+    if (da.special != .finite or db.special != .finite) return add(f, a, b);
+    if (da.significand == 0 or db.significand == 0) return add(f, a, b);
+
+    const sub_shift: i32 = 1 - f.bias - @as(i32, @intCast(f.mant_bits));
+    const sa = stepsOf(da, sub_shift);
+    const sb = stepsOf(db, sub_shift);
+    const k: u16 = @max(sa.k, sb.k);
+    const scale_a: u16 = k - sa.k;
+    const scale_b: u16 = k - sb.k;
+    // `q` already counts STEPS (an integer) and `rem` is the fraction of a
+    // step over 2^k, so the sum is integer + fraction/2^k and the ONE
+    // rounding is RNE on that fraction. Dividing a combined numerator by
+    // 2^k instead would throw the integer part away — which is how the
+    // first version of this function answered 0 for min_sub + min_sub.
+    const sign_a: i128 = if (da.sign == 1) -1 else 1;
+    const sign_b: i128 = if (db.sign == 1) -1 else 1;
+    // The integer parts are counts of steps already — no scaling. Only the
+    // REMAINDERS live at different resolutions, so only they are lifted to
+    // the common denominator.
+    const integer: i128 = sign_a * @as(i128, @intCast(sa.q)) + sign_b * @as(i128, @intCast(sb.q));
+    const rest: i128 = sign_a * @as(i128, @intCast(sa.rem << @intCast(scale_a))) +
+        sign_b * @as(i128, @intCast(sb.rem << @intCast(scale_b)));
+    const denom: i128 = @as(i128, 1) << @intCast(k);
+    var count: i128 = integer;
+    const tail: i128 = if (rest < 0) -rest else rest;
+    const half: i128 = @divTrunc(denom, 2);
+    if (tail > half) {
+        count += if (rest > 0) 1 else -1;
+    } else if (tail == half and k > 0) {
+        if (@mod(count, 2) != 0) count += if (rest > 0) 1 else -1;
+    }
+    if (count == 0) return packSpecial(f, if (da.sign == 1 and db.sign == 1) 1 else 0, .zero);
+    const result_sign: u1 = if (count < 0) 1 else 0;
+    const m: u128 = @intCast(if (count < 0) -count else count);
+
+    // The count is in subnormal steps, so the value is m · 2^sub_shift and
+    // the field follows from m's top bit. No rounding is left: the single
+    // rounding already happened when the fraction was folded into `count`.
+    const bits: u16 = 128 - @as(u16, @intCast(@clz(m)));
+    const field: i32 = sub_shift + @as(i32, @intCast(bits - 1)) + f.bias;
+    const max_field: i32 = if (f.has_inf_nan) @as(i32, f.emax()) - 1 else f.emax();
+    if (field < 1) {
+        return f.pack(.{ .sign = result_sign, .exponent = 0, .mantissa = @intCast(m) });
+    }
+    const keep: u16 = f.keptLow();
+    const drop: u16 = bits - 1 - keep;
+    var mant: u64 = divRoundPow2(m, drop);
+    var e: i32 = field;
+    if (mant == (@as(u64, 1) << @intCast(keep + 1))) {
+        mant = @as(u64, 1) << @intCast(keep);
+        e += 1;
+    }
+    if (e > max_field) return packSpecial(f, result_sign, .inf);
+    return f.pack(.{
+        .sign = result_sign,
+        .exponent = @intCast(e),
+        .mantissa = @intCast(mant - (@as(u64, 1) << @intCast(keep))),
+    });
+}
+
+test "add: the cases a float test always forgets" {
+    const f = fmt_lib.binary16;
+    const one: u16 = 0x3C00; // 1.0
+    const neg_one: u16 = 0xBC00;
+    const zero: u16 = 0x0000;
+    const neg_zero: u16 = 0x8000;
+    const inf: u16 = 0x7C00;
+    const nan: u16 = canonicalNaN(f);
+    const min_normal: u16 = 0x0400;
+    const min_sub: u16 = 0x0001;
+    const max_norm: u16 = 0x7BFF;
+
+    try testing.expectEqual(@as(u16, 0x4000), try add(f, one, one)); // 2.0
+    try testing.expectEqual(@as(u16, 0x0000), try add(f, one, neg_one)); // exact cancellation -> +0
+    try testing.expectEqual(neg_zero, try add(f, neg_zero, neg_zero)); // -0 + -0 = -0
+    try testing.expectEqual(@as(u16, 0x0000), try add(f, neg_zero, zero)); // -0 + +0 = +0
+    try testing.expectEqual(@as(u16, 0xBC00), try add(f, neg_one, zero)); // the sign of the non-zero
+    try testing.expectEqual(inf, try add(f, inf, one));
+    try testing.expectEqual(inf, try add(f, inf, neg_one)); // the infinity's sign, not the other's
+    try testing.expectEqual(nan, try add(f, inf, neg_inf(f))); // the invalid operation
+    try testing.expectEqual(nan, try add(f, nan, one));
+    try testing.expectEqual(inf, try add(f, max_norm, max_norm)); // overflow
+    // The min normal plus the min subnormal is EXACT: no rounding, no
+    // error, and the second operand's scale is what makes it so. This pair
+    // is also the one that caught the add's first version scaling the
+    // smaller significand up instead of the bigger one.
+    try testing.expectEqual(@as(u16, 0x0401), try add(f, min_normal, min_sub));
+    try testing.expectEqual(@as(u16, 0x0000), try add(f, neg_min_sub(f), min_sub)); // exact cancellation
+}
+
+fn neg_inf(f: Format) u16 {
+    return f.pack(.{ .sign = 1, .exponent = f.emax(), .mantissa = 0 });
+}
+
+fn neg_min_sub(f: Format) u16 {
+    return f.pack(.{ .sign = 1, .exponent = 0, .mantissa = 1 });
+}
+
+test "add: a tie rounds to even, and only once" {
+    const f = fmt_lib.binary16;
+    // A tie at 1.0: 1.0 + 2^-11 sits exactly between 1.0 (even) and
+    // 1.0 + ulp (odd), so RNE keeps 1.0.
+    const two_pow_minus_11: u16 = f.pack(.{ .sign = 0, .exponent = @intCast(f.bias - 11), .mantissa = 0 });
+    try testing.expectEqual(@as(u16, 0x3C00), try add(f, 0x3C00, two_pow_minus_11));
+    // The same tie one ulp up: 1+ulp (odd) + 2^-11 is between 1+ulp and
+    // 1+2ulp (even), so this one goes UP. Same bit pattern, opposite
+    // answer: a rounding that only looked at the sticky would get this
+    // wrong.
+    try testing.expectEqual(@as(u16, 0x3C02), try add(f, 0x3C01, two_pow_minus_11));
+    // The subnormal grid crossing into normal: the max subnormal is 1023
+    // steps and twice that is 2046, which is the min normal plus 1022 —
+    // exact, and the answer's exponent field has to become 1.
+    try testing.expectEqual(@as(u16, 0x07FE), try add(f, 0x03FF, 0x03FF));
+    // Just ABOVE the halfway point goes up, and just BELOW stays: the
+    // same tie with the second operand negated, one ulp of difference in
+    // the operand, opposite answers. A rounding that ignored the tail
+    // would give the same answer for both.
+    const just_over_half: u16 = f.pack(.{ .sign = 0, .exponent = @intCast(f.bias - 11), .mantissa = 1 });
+    try testing.expectEqual(@as(u16, 0x3C02), try add(f, 0x3C01, just_over_half));
+    // Subtracting the same quantity lands strictly BELOW the midpoint, so
+    // the answer is 1.0 — the other neighbour of the tie above.
+    const just_under_half: u16 = f.pack(.{ .sign = 1, .exponent = @intCast(f.bias - 11), .mantissa = 1 });
+    try testing.expectEqual(@as(u16, 0x3C00), try add(f, 0x3C01, just_under_half));
+}
+
+test "add: agrees with a second implementation over a grid" {
+    const f = fmt_lib.binary16;
+    var i: u16 = 1;
+    var checked: usize = 0;
+    while (i < 0x7C00) : (i += 37) {
+        var j: u16 = 1;
+        while (j < 0x7C00) : (j += 41) {
+            const got = try add(f, i, j);
+            const other = try addBySteps(f, i, j);
+            if (got != other) {
+                std.debug.print("add {x} + {x}: {x} vs {x}\n", .{ i, j, got, other });
+                return error.AddMismatch;
+            }
+            checked += 1;
+        }
+    }
+    try testing.expect(checked > 1000);
 }

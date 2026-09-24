@@ -327,3 +327,81 @@ test "barrel: it proves, verifies, and rejects a forged shift" {
         return error.ForgedShiftAccepted;
     } else |_| {}
 }
+
+// The cost of the shift an fp32 ADDER would need, measured rather than
+// argued: aligning the smaller operand means shifting a 24-bit significand
+// by up to 2·emax = 254 places, which is an 8-bit amount.
+//
+// This test exists to keep a decision honest. The multiply's reduction
+// needs (11, 4) and costs 86 constraints; an fp32 add's alignment needs
+// (24, 8) and costs several times that, per operand, per add. Sixteen adds
+// per row — the chunk size — would then need tens of thousands of composed
+// constraints, and the verifier keeps its Fiat-Shamir alphas in a fixed
+// stack array sized by `max_composed_constraints`. So the proof's
+// accumulation stays the EXACT field sum (see BLUE_PRINT §3.1, the
+// normative QuantScheme) and the fp32 semantics live in the cross-check
+// test, where `float_ref.add` is the reference.
+test "the fp32 adder's alignment shift, measured" {
+    const a = testing.allocator;
+    // The shift an fp32 ADDER would need, measured rather than argued:
+    // aligning the smaller operand means shifting a 24-bit significand by
+    // up to 2·emax = 254 places, which is an 8-bit amount. (11, 4) is the
+    // multiply's reduction, for scale.
+    //
+    // The numbers include the input bits' own booleanity, which the float
+    // AIR already emits for its kept field; subtract `width` to compare
+    // with the AIR's own gadget cost.
+    //
+    // This test exists to keep a decision honest. Per operand, per add,
+    // this is the FLOOR: an fp32 add also needs the exponent comparison,
+    // the sum, its bit decomposition, a normalisation and a rounding.
+    // Sixteen adds per row — the chunk size — would put the composed
+    // constraints an order of magnitude past what the verifier's alpha
+    // array is sized for, so the proof's accumulation stays the EXACT field
+    // sum (BLUE_PRINT §3.1's normative QuantScheme) and the fp32 semantics
+    // live in the cross-check, where `float_ref.add` is the reference.
+    inline for (.{ .{ 11, 4 }, .{ 24, 8 }, .{ 24, 6 } }) |shape| {
+        const width: u16 = comptime shape[0];
+        const stages: u16 = comptime shape[1];
+        var b = Builder.init(a);
+        defer b.factors.deinit(a);
+        for (0..width) |i| try b.boolean("input bit is boolean", @as(u16, @intCast(i)));
+        const out_base: u16 = width + stages;
+        const cost: usize = comptime barrel.column_cost(.{
+            .in_base = 0,
+            .width = width,
+            .amount_base = width,
+            .amount_bits = stages,
+            .out_base = out_base,
+            .sticky_col = out_base,
+            .round_col = out_base,
+            .below_col = out_base,
+            .round_bits = true,
+        });
+        const cfg: barrel.Config = comptime .{
+            .in_base = 0,
+            .width = width,
+            .amount_base = width,
+            .amount_bits = stages,
+            .out_base = out_base,
+            .sticky_col = out_base + @as(u16, @intCast(cost)) - 3,
+            .round_col = out_base + @as(u16, @intCast(cost)) - 2,
+            .below_col = out_base + @as(u16, @intCast(cost)) - 1,
+            .round_bits = true,
+        };
+        try barrel.build(&b, cfg);
+        var owned = try bld.freeze(a, &b, 1);
+        defer owned.deinit();
+
+        // MEASURED, pinned: 97 for the multiply's reduction (11 bits, 4
+        // stages) and 526 / 272 for the adder's alignment (24 bits, 8 and
+        // 6 stages). The first number minus the 11 input bits is the 86
+        // the float AIR actually pays.
+        const want: usize = switch (shape[0]) {
+            11 => 97,
+            24 => if (shape[1] == 8) 526 else 272,
+            else => unreachable,
+        };
+        try testing.expectEqual(want, owned.system().composedCount());
+    }
+}
