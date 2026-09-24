@@ -50,7 +50,7 @@ adapters/
 ├── llama_cpp/     # [done] zero-fork GGUF attestation wrapper
 │                  #        (zig build llama-adapter)
 ├── zig_ai/        # [done] same-language module import: TensorSource →
-│                  #        root, MetricHooks → witness (81/81 tests)
+│                  #        root, MetricHooks → witness (11/11 tests)
 ├── vllm/          # [done] ctypes over libzkml.so, `zkml_attested` load
 │                  #        format, witness recorder (15 hermetic tests)
 └── ktransformers/ # [done] reference C glue kt_zkml_* → zkml_*
