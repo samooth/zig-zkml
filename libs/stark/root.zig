@@ -482,12 +482,22 @@ pub fn verify(
     }
 
     // Boundary constraints, at the two fixed rows the prover must open.
+    //
+    // The INDEX is part of what has to be checked, not just the leaf: the
+    // Merkle proof authenticates the window AT `opening.index`, so without
+    // pinning that index a prover could satisfy the boundary constraints on
+    // some other row of its own choosing and have them say nothing about the
+    // ends. The stride is the same one `prove` uses — one trace row is
+    // 2^log_blowup LDE positions — so the last row is (n−1)·stride.
     if (system.hasBoundary()) {
         const expected: usize = if (n > 1) 2 else 1;
         if (proof.boundary_openings.len != expected) return Error.InvalidProof;
+        const stride = @as(usize, 1) << config.log_blowup;
         for (proof.boundary_openings, 0..) |opening, qi| {
             if (opening.prev.len != ncols or opening.current.len != ncols or
                 opening.next.len != ncols) return Error.InvalidProof;
+            const want_index: usize = if (qi == 0) 0 else (n - 1) * stride;
+            if (opening.index != want_index) return Error.InvalidProof;
             const leaf = commit_lib.hashWindow(ncols, opening.prev, opening.current, opening.next);
             commit_lib.verifyLeaf(proof.commitment, opening.index, leaf, opening.path) catch return false;
             const w = Window{

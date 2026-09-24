@@ -182,6 +182,59 @@ test "gemm: ±1 ulp in an operand changes the attestsed output" {
     );
 }
 
+test "gemm: a boundary opening at the WRONG row is rejected" {
+    const a = testing.allocator;
+    const n = 16;
+    const av = try a.alloc(Goldilocks, n);
+    defer a.free(av);
+    const bv = try a.alloc(Goldilocks, n);
+    defer a.free(bv);
+    for (0..n) |i| {
+        av[i] = Goldilocks.fromU64(@intCast(i + 1));
+        bv[i] = Goldilocks.fromU64(@intCast(2 * i + 1));
+    }
+    // The claimed output has to be the real sum, or the closing constraint
+    // fails and there is no honest proof to tamper with.
+    var total = Goldilocks.zero;
+    for (0..n) |i| total = total.add(av[i].mul(bv[i]));
+    var trace = try gemm_air.buildTrace(a, av, bv, total);
+    defer trace.deinit(a);
+
+    var pt = stark.Transcript.init("zkml.gemm.boundary.index");
+    var proof = try stark.prove(a, &pt, .{
+        .rows = trace.rows,
+        .columns = trace.columns,
+    }, gemm_air.system(), CONFIG_A);
+    defer proof.deinit(a);
+    var vt = stark.Transcript.init("zkml.gemm.boundary.index");
+    try testing.expect(try stark.verify(&vt, &proof, gemm_air.system(), CONFIG_A));
+
+    // The attack the pin closes: claim the boundary window lives at some
+    // OTHER row. The Merkle proof still authenticates a real leaf — it is
+    // just the wrong leaf — and the boundary constraints are evaluated
+    // there instead of at the ends, so before the index was checked this
+    // was accepted. The index is now part of the claim.
+    // A wrong index is a MALFORMED proof rather than a failed check, so
+    // verify reports it as InvalidProof — the same treatment the boundary
+    // opening count already had.
+    const stride: usize = 1 << CONFIG_A.log_blowup;
+    proof.boundary_openings[0].index = 2 * stride;
+    var vt2 = stark.Transcript.init("zkml.gemm.boundary.index");
+    try testing.expectError(
+        stark.Error.InvalidProof,
+        stark.verify(&vt2, &proof, gemm_air.system(), CONFIG_A),
+    );
+
+    // And the last one has to be exactly (n-1)*stride, not one row before.
+    proof.boundary_openings[0].index = 0;
+    proof.boundary_openings[1].index -= stride;
+    var vt3 = stark.Transcript.init("zkml.gemm.boundary.index");
+    try testing.expectError(
+        stark.Error.InvalidProof,
+        stark.verify(&vt3, &proof, gemm_air.system(), CONFIG_A),
+    );
+}
+
 test "gemm: the boundary constraints are what make the AIR non-vacuous" {
     const a = testing.allocator;
 
