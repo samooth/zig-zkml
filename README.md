@@ -2,6 +2,7 @@
 
 ![toolchain](https://img.shields.io/badge/zig-0.16.0-f7a41d?logo=zig&style=flat-square)
 ![estado](https://img.shields.io/badge/estado-pre--alpha--F2-d08770?style=flat-square)
+![gates](https://github.com/samooth/zig-zkml/actions/workflows/ci.yml/badge.svg)
 
 Verifiable-inference (zkML) layer for host inference engines — **llama.cpp, vLLM, zig-ai, ktransformers-zig** — via per-engine adapters: prove that a layer's output was produced by the committed model weights, using the engine's native kernels as the witness generator.
 
@@ -89,7 +90,14 @@ zig build --summary all test    # unit tests (check the test count!)
 zig build --summary all abi     # C-ABI end-to-end + nm symbol gate
 zig build --summary all verify  # tests + ABI + independent Python audit
 zig build fmt                   # formatting gate
+zig build vllm-adapter          # vLLM ctypes adapter tests (python3, no vLLM needed)
 ```
+
+`zig build llama-adapter` and `zig build kt-adapter` are **local integration
+gates, not CI**: both need a sibling checkout outside this repository
+(`../llama.cpp`, and `../ktransformers-zig` already built). CI
+(`.github/workflows/ci.yml`) runs everything a clean checkout can: `fmt`,
+the test suite, `abi`, `verify` and the vLLM adapter.
 
 The `verify` step is the F0 acceptance gate: the Zig library generates a
 weights root and an inclusion proof through the exported C API, and

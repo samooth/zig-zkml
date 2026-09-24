@@ -1,0 +1,77 @@
+name: gates
+
+# Every gate that a clean checkout can actually run. Verified by cloning
+# this repository to an empty directory and running each step there.
+#
+# Deliberately NOT here:
+#   - zig build llama-adapter and zig build kt-adapter need sibling
+#     checkouts outside this repository (../llama.cpp and
+#     ../ktransformers-zig, the latter already built with its own
+#     zig build). A fresh CI runner has neither, and cloning ktransformers
+#     would drag in a torch toolchain. They stay local integration gates.
+#   - zig build spike is the historical audit that CONCLUDED the old
+#     zig-algebra FRI was unsound. It prints a "NOT sound" verdict on
+#     purpose; it is a document, not a gate.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    name: fmt, tests, ABI, audit, vLLM adapter
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # The project is pinned to one Zig and builds against nothing else,
+      # so the version is read from ziglang.org's own index rather than
+      # guessed: no third-party setup action, and the tarball's sha256
+      # comes from the same document that named it.
+      - name: Install Zig 0.16.0
+        run: |
+          set -euo pipefail
+          version=0.16.0
+          curl -fsSL https://ziglang.org/download/index.json -o /tmp/zig-index.json
+          url=$(python3 -c "import json;print(json.load(open('/tmp/zig-index.json'))['$version']['x86_64-linux']['tarball'])")
+          shasum=$(python3 -c "import json;print(json.load(open('/tmp/zig-index.json'))['$version']['x86_64-linux']['shasum'])")
+          curl -fsSL "$url" -o /tmp/zig.tar.xz
+          echo "$shasum  /tmp/zig.tar.xz" | sha256sum -c -
+          sudo mkdir -p /opt/zig
+          sudo tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1
+          echo /opt/zig >> "$GITHUB_PATH"
+
+      - name: Toolchain
+        run: |
+          zig version
+          python3 --version
+
+      - name: Formatting
+        run: zig build fmt
+
+      - name: Unit tests
+        run: zig build test --summary all
+
+      - name: C ABI end to end
+        run: zig build abi
+
+      - name: Tests + ABI + independent Python audit
+        run: zig build verify
+
+      - name: vLLM ctypes adapter
+        run: zig build vllm-adapter
+
+      - name: The suite really ran
+        run: |
+          # A build step that silently runs zero tests would still be
+          # green, so the count is asserted rather than trusted.
+          zig build test --summary all 2>&1 | tee /tmp/summary.txt
+          grep -Eq '[1-9][0-9]* tests? passed' /tmp/summary.txt
