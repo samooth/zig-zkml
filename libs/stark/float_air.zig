@@ -100,7 +100,24 @@ pub fn Layout(comptime f: Format) type {
         pub const col_inc: u16 = col_or_sl + 1;
         pub const col_carry: u16 = col_inc + 1;
         pub const col_c_bits: u16 = col_carry + 1;
-        pub const column_count: usize = col_c_bits + width;
+        // Overflow. When the rounded result's exponent reaches the all-ones
+        // field the answer is INFINITY, whose mantissa is zero — while the
+        // arithmetic below still produces the correctly rounded
+        // significand. So the output keeps one set of bits, the flag
+        // zeroes their mantissa, and the mantissa equation is switched off
+        // exactly when the flag is set. The exponent needs no switch: an
+        // overflow's exponent IS the all-ones field, so the same equation
+        // holds either way.
+        pub const col_c_mant_val: u16 = col_c_bits + width;
+        pub const col_diff: u16 = col_c_mant_val + 1;
+        pub const col_not_overflow: u16 = col_diff + 1;
+        pub const col_d0: u16 = col_not_overflow + 1;
+        pub const col_d0_gap: u16 = col_d0 + 1;
+        pub const col_c_exp_val: u16 = col_d0_gap + 1;
+        pub const col_exp_gap: u16 = col_c_exp_val + 1;
+        pub const col_exp_gap_inv: u16 = col_exp_gap + 1;
+        pub const col_overflow: u16 = col_exp_gap_inv + 1;
+        pub const column_count: usize = col_overflow + 1;
 
         pub inline fn aBit(i: u16) u16 {
             return col_a_bits + i;
@@ -141,6 +158,11 @@ pub fn Layout(comptime f: Format) type {
         pub inline fn cSign() u16 {
             return cBit(width - 1);
         }
+        /// The output exponent's value, and the all-ones gap that says
+        /// whether it reached emax.
+        pub inline fn cExpVal() u16 {
+            return col_c_exp_val;
+        }
         /// The product bit that decides normalisation.
         pub inline fn topBit() u16 {
             return pBit(@intCast(f.normBit()));
@@ -166,7 +188,7 @@ fn cname(comptime fmt: []const u8, comptime args: anytype) []const u8 {
 }
 
 /// Number of constraints per multiply — the spike's headline number.
-pub const constraints_per_multiply: usize = 108;
+pub const constraints_per_multiply: usize = 118;
 
 /// The cost model, in constraints per multiply, derived from the format's
 /// widths: 2·byteWidth bit-decompositions, the product's bit-decomposition
@@ -180,7 +202,14 @@ pub fn expected_constraints(f: Format) usize {
     // exponent guards, the product and its reconstruction, norm, round,
     // the two sticky ORs and their mux, the increment OR and its mux, the
     // carry booleanity, and the mantissa, exponent and sign equations.
-    return 3 * @as(usize, f.byteWidth()) + f.productBits() + f.keptHigh() + 27;
+    // The +10 over the pre-overflow 27. The old single mantissa equation is
+    // replaced, not duplicated, so the additions are: the output exponent's
+    // bit sum (+1) and its arithmetic column d0 (+1), the clamp's gap (+1)
+    // and its product (+1), the flag's gap (+1) and inverse identity (+1),
+    // the output mantissa's value (+1), the rounded-mantissa difference
+    // (+1), the not-overflow complement (+1), the gated equation (+1), and
+    // the zero mantissa on overflow (+1).
+    return 3 * @as(usize, f.byteWidth()) + f.productBits() + f.keptHigh() + 37;
 }
 
 /// Build the fp16 multiply AIR. `rows` multiplies, one per row.
@@ -194,7 +223,6 @@ pub fn buildSystem(allocator: std.mem.Allocator, rows: usize, comptime f: Format
     const nm_b_sig = comptime cname("b significand = {d} + b mantissa", .{f.mantImplicit()});
     const nm_norm = comptime cname("norm = product bit {d}", .{f.normBit()});
     const nm_round = comptime cname("round = mux(norm, p{d}, p{d})", .{ f.keptHigh() - 1, f.keptHigh() - 2 });
-    const nm_kept = comptime cname("kept + inc = {d} + c mantissa + {d}·carry", .{ f.mantImplicit(), f.mantImplicit() });
     const nm_exp = comptime cname("ec = ea + eb + {d} + norm + carry − {d}", .{ f.keptLow(), @as(u16, f.bias) + @as(u16, f.mant_bits) - @as(u16, f.keptLow()) });
     std.debug.assert(rows > 0);
     var b = Builder{ .allocator = allocator };
@@ -406,52 +434,30 @@ pub fn buildSystem(allocator: std.mem.Allocator, rows: usize, comptime f: Format
         .{ .factors = try b.one(L.col_carry), .coefficient = kNegOne },
     });
 
-    // The output significand: kept + inc = 1024 + c_mant + 1024·carry.
-    // On a carry the kept field reached 2048, so the significand is
-    // exactly 1.0 and the mantissa is zero — which is why the same linear
-    // equation covers both cases.
+    // The output exponent. The bit sum is routed through a value column
+    // because that value is what the overflow flag reads.
     {
-        // inc, the kept bits, the implicit one, the carry, the mantissa.
-        var ts: [3 + f.sigBits() + f.mant_bits]LinTerm = undefined;
-        var n: usize = 0;
-        ts[n] = .{ .factors = try b.one(L.col_inc) };
-        n += 1;
-        for (0..f.sigBits()) |i| {
-            ts[n] = .{
-                .factors = try b.one(L.col_kept + @as(u16, @intCast(i))),
-                .coefficient = g(@as(u64, 1) << @intCast(i)),
-            };
-            n += 1;
-        }
-        ts[n] = .{ .factors = try b.constant(g(f.mantImplicit())), .coefficient = kNegOne };
-        n += 1;
-        // -mantImplicit·carry, not -carry: a carry means the kept field
-        // reached 2·mantImplicit, and the equation has to say so.
-        ts[n] = .{ .factors = try b.one(L.col_carry), .coefficient = Fp2.neg(g(f.mantImplicit())) };
-        n += 1;
-        for (0..L.mant) |i| {
-            ts[n] = .{
-                .factors = try b.one(L.cMant() + @as(u16, @intCast(i))),
-                .coefficient = g(kNegModPow2(@intCast(i))),
-            };
-            n += 1;
-        }
-        try b.lin(nm_kept, .composed, ts[0..n]);
-    }
-
-    // The output exponent: ec = ea + eb + keep + carry − 25, with
-    // keep = 10 + norm. Rearranged as zero.
-    {
-        // 3 exponent fields of exp_bits terms each, plus norm, carry, 25.
-        var ts: [3 * f.exp_bits + 4]LinTerm = undefined;
-        var n: usize = 0;
+        var bits: [1 + f.exp_bits]LinTerm = undefined;
+        bits[0] = .{ .factors = try b.one(L.cExpVal()) };
         for (0..L.exps) |i| {
-            ts[n] = .{
-                .factors = try b.one(L.cExp() + @as(u16, @intCast(i))),
-                .coefficient = g(@as(u64, 1) << @intCast(i)),
+            const d: u16 = @intCast(i);
+            bits[1 + d] = .{
+                .factors = try b.one(L.cExp() + d),
+                .coefficient = g(kNegModPow2(d)),
             };
-            n += 1;
         }
+        try b.lin("output exponent value is its bits", .composed, &bits);
+    }
+    {
+        // ec = ea + eb + keep + carry − (bias + mant_bits), unchanged: an
+        // overflow's exponent IS the all-ones field, so this equation is
+        // what MAKES the flag correct rather than a separate assumption.
+        // d0 = ea + eb + keep + carry − (bias + mant_bits), the arithmetic
+        // exponent. The OUTPUT's exponent is the clamped copy, below.
+        var ts: [2 * f.exp_bits + 4]LinTerm = undefined;
+        var n: usize = 0;
+        ts[n] = .{ .factors = try b.one(L.col_d0) };
+        n += 1;
         for (0..L.exps) |i| {
             ts[n] = .{
                 .factors = try b.one(L.aExp() + @as(u16, @intCast(i))),
@@ -478,6 +484,103 @@ pub fn buildSystem(allocator: std.mem.Allocator, rows: usize, comptime f: Format
         n += 1;
         try b.lin(nm_exp, .composed, ts[0..n]);
     }
+
+    // The clamp. A big overflow lands the arithmetic exponent ABOVE emax —
+    // max · max in binary16 gives 46, which does not fit in five bits — and
+    // the output's exponent field is emax, because that field is what
+    // infinity IS. "Clamp to emax" is an inequality, which this IR cannot
+    // state, so it becomes a product with a quantity that is fully DETERMINED
+    // and therefore leaves the prover no freedom at all:
+    //
+    //   gap0 = emax − d0
+    //   ec   = d0 + overflow·gap0
+    //
+    // With overflow = 0 the output exponent is the arithmetic one; with
+    // overflow = 1 the product is emax − d0 and the sum is emax. There is no
+    // witness to choose badly, which is why this is the clamp to build
+    // rather than a saturating one with a free overshoot column.
+    try b.lin("arithmetic gap to emax", .composed, &.{
+        .{ .factors = try b.one(L.col_d0_gap) },
+        .{ .factors = try b.one(L.col_d0) },
+        .{ .factors = try b.constant(g(f.emax())), .coefficient = kNegOne },
+    });
+    try b.lin("output exponent is the arithmetic one, clamped to emax", .composed, &.{
+        .{ .factors = try b.one(L.cExpVal()) },
+        .{ .factors = try b.one(L.col_d0), .coefficient = kNegOne },
+        .{ .factors = try b.pair(L.col_overflow, L.col_d0_gap), .coefficient = kNegOne },
+    });
+
+    // The mantissa, and the overflow switch.
+    {
+        var bits: [1 + f.mant_bits]LinTerm = undefined;
+        bits[0] = .{ .factors = try b.one(L.col_c_mant_val) };
+        for (0..L.mant) |i| {
+            const d: u16 = @intCast(i);
+            bits[1 + d] = .{
+                .factors = try b.one(L.cMant() + d),
+                .coefficient = g(kNegModPow2(d)),
+            };
+        }
+        try b.lin("output mantissa value is its bits", .composed, &bits);
+
+        // diff = kept + inc − implicit·(1 + carry): the correctly rounded
+        // mantissa of a NORMAL result, which an overflow does not have.
+        var ts: [4 + f.sigBits()]LinTerm = undefined;
+        var n: usize = 0;
+        ts[n] = .{ .factors = try b.one(L.col_diff) };
+        n += 1;
+        for (0..f.sigBits()) |i| {
+            ts[n] = .{
+                .factors = try b.one(L.col_kept + @as(u16, @intCast(i))),
+                .coefficient = g(kNegModPow2(@intCast(i))),
+            };
+            n += 1;
+        }
+        ts[n] = .{ .factors = try b.one(L.col_inc), .coefficient = kNegOne };
+        n += 1;
+        ts[n] = .{ .factors = try b.constant(g(f.mantImplicit())) };
+        n += 1;
+        // +mantImplicit·carry: a carry means the kept field reached
+        // 2·mantImplicit, so the mantissa is exactly 1.0 and the equation
+        // has to say so.
+        ts[n] = .{ .factors = try b.one(L.col_carry), .coefficient = g(f.mantImplicit()) };
+        n += 1;
+        try b.lin("rounded mantissa before the overflow switch", .composed, ts[0..n]);
+
+        try b.lin("not-overflow is 1 - overflow", .composed, &.{
+            .{ .factors = try b.one(L.col_not_overflow) },
+            .{ .factors = try b.one(L.col_overflow) },
+            .{ .factors = try b.constant(kOne), .coefficient = kNegOne },
+        });
+
+        // The switch itself. Multiplying BOTH sides by (1 − overflow) is
+        // degree 2, because `diff` and `c_mant_val` are columns and the
+        // factor is a column too: gating the original equation instead
+        // would have been degree 3 (implicit·carry·(1−overflow)).
+        try b.lin("mantissa equation, gated on not overflowing", .composed, &.{
+            .{ .factors = try b.pair(L.col_diff, L.col_not_overflow), .coefficient = kNegOne },
+            .{ .factors = try b.pair(L.col_c_mant_val, L.col_not_overflow) },
+        });
+
+        // And the output mantissa is ZERO when it overflows, which is what
+        // makes the pattern infinity rather than a NaN. Without this the
+        // prover could answer a NaN for a product whose truth is infinity,
+        // and the gate above would not notice: it is switched off.
+        try b.lin("an overflow has a zero mantissa", .composed, &.{
+            .{ .factors = try b.pair(L.col_c_mant_val, L.col_overflow) },
+        });
+    }
+
+    // The overflow flag: emax − ec == 0 exactly when the rounded exponent
+    // reached the all-ones field, which is exactly when IEEE-754 says the
+    // result is infinity. `zeroOrNonZero` is the only way this IR can say
+    // "is zero": an inverse witness plus a product.
+    try b.lin("exponent gap to emax", .composed, &.{
+        .{ .factors = try b.one(L.col_exp_gap) },
+        .{ .factors = try b.one(L.cExpVal()) },
+        .{ .factors = try b.constant(g(f.emax())), .coefficient = kNegOne },
+    });
+    try b.zeroOrNonZero("overflow is the all-ones exponent", L.col_exp_gap, L.col_exp_gap_inv, L.col_overflow);
 
     // The output sign is the XOR of the input signs: a + b − 2ab.
     try b.lin("c_sign = a_sign XOR b_sign", .composed, &.{
@@ -567,7 +670,11 @@ pub fn buildTrace(
         }
         const expected = float_ref.multiply(f, a, b) catch return BuildTraceError.UnsupportedCase;
         const pc = f.parts(expected);
-        if (pc.exponent == 0 or pc.exponent == f.emax()) return BuildTraceError.UnsupportedCase;
+        // An infinite result is IN SCOPE now: the overflow flag is what makes
+        // it one. A subnormal result is still out (it needs the range
+        // reduction, see the design note in TODO.md).
+        if (pc.exponent == 0) return BuildTraceError.UnsupportedCase;
+        const overflow: u32 = if (pc.exponent == f.emax()) 1 else 0;
 
         trace.writeBits(L.col_a_bits, a, @intCast(f.byteWidth()), r);
         trace.writeBits(L.col_b_bits, b, @intCast(f.byteWidth()), r);
@@ -633,6 +740,34 @@ pub fn buildTrace(
         cols[L.col_or_sl][r] = Fp2.re(Goldilocks.fromU64(or_sl));
         cols[L.col_inc][r] = Fp2.re(Goldilocks.fromU64(inc));
         cols[L.col_carry][r] = Fp2.re(Goldilocks.fromU64(carry));
+
+        // Overflow witness. `diff` is the correctly rounded mantissa a
+        // NORMAL result would have, which an overflow does not use; the
+        // output's own values come from the reference's answer, so the
+        // exponent is the all-ones field exactly when the flag is set.
+        const implicit: u64 = f.mantImplicit();
+        const diff_signed: i64 = @as(i64, @intCast(kept_sum)) + @as(i64, @intCast(inc)) -
+            @as(i64, @intCast(implicit)) - @as(i64, @intCast(implicit * carry));
+        const diff: u64 = @intCast(@mod(diff_signed, @as(i64, @intCast(Goldilocks.p))));
+        cols[L.col_diff][r] = Fp2.re(Goldilocks.fromU64(diff));
+        cols[L.col_not_overflow][r] = Fp2.re(Goldilocks.fromU64(1 - overflow));
+        const d0: u64 = @intCast(@mod(@as(i64, @intCast(pa.exponent)) +
+            @as(i64, @intCast(pb.exponent)) +
+            @as(i64, @intCast(f.keptLow())) +
+            @as(i64, @intCast(norm)) + @as(i64, @intCast(carry)) -
+            @as(i64, @intCast(@as(u16, f.bias) + @as(u16, f.mant_bits))), @as(i64, @intCast(Goldilocks.p))));
+        cols[L.col_d0][r] = Fp2.re(Goldilocks.fromU64(d0));
+        const d0_gap: u64 = @intCast(@mod(@as(i64, @intCast(f.emax())) - @as(i64, @intCast(d0)), @as(i64, @intCast(Goldilocks.p))));
+        cols[L.col_d0_gap][r] = Fp2.re(Goldilocks.fromU64(d0_gap));
+        const c_exp_val: u64 = pc.exponent;
+        cols[L.col_c_exp_val][r] = Fp2.re(Goldilocks.fromU64(c_exp_val));
+        cols[L.col_c_mant_val][r] = Fp2.re(Goldilocks.fromU64(pc.mantissa));
+        const gap: u64 = f.emax() - c_exp_val;
+        cols[L.col_exp_gap][r] = Fp2.re(Goldilocks.fromU64(gap));
+        cols[L.col_exp_gap_inv][r] = Fp2.re(
+            if (gap == 0) Goldilocks.zero else Goldilocks.fromU64(gap).inv() catch unreachable,
+        );
+        cols[L.col_overflow][r] = Fp2.re(Goldilocks.fromU64(overflow));
     }
     return trace;
 }

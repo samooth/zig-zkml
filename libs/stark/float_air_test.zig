@@ -28,7 +28,7 @@ const Fp2 = stark.Fp2;
 const rows: usize = 8;
 
 /// The AIR binds the format structurally — a binary16 system has 104
-/// columns and 108 constraints per row and will not verify against a
+/// columns and 118 constraints per row and will not verify against a
 /// bfloat16 one — so the label does not have to name the format.
 const TRANSCRIPT = "zkml.float.v1";
 
@@ -94,7 +94,7 @@ fn proveAndVerify(allocator: std.mem.Allocator, trace: *const air.Trace) !void {
     try testing.expect(try stark.verify(&vt, &proof, sys2.system(), CONFIG));
 }
 
-test "float air binary16: 108 constraints per multiply, degree 2 throughout" {
+test "float air binary16: 118 constraints per multiply, degree 2 throughout" {
     const a = testing.allocator;
     var sys = try air.buildSystem(a, 1, F16);
     defer sys.deinit();
@@ -103,7 +103,7 @@ test "float air binary16: 108 constraints per multiply, degree 2 throughout" {
     try testing.expectEqual(@as(usize, 2), sys.system().maxDegree());
     try testing.expect(!sys.system().hasBoundary());
     // The spike's headline: the whole cost of bit-exact IEEE-754 rounding.
-    try testing.expectEqual(@as(usize, 108), sys.system().composedCount());
+    try testing.expectEqual(@as(usize, 118), sys.system().composedCount());
 }
 
 test "float air binary16: a trace of real multiplies proves and verifies" {
@@ -257,7 +257,7 @@ test "float air binary16: many random normal pairs prove and verify" {
     // exercised on data it was not hand-checked against.
     var prng = std.Random.DefaultPrng.init(0xF16A11);
     const rng = prng.random();
-    // 8 rows, not 16: at 108 composed constraints per multiply, 16 rows
+    // 8 rows, not 16: at 118 composed constraints per multiply, 16 rows
     // would need 1728 alphas and trip the verifier's 1024 ceiling. That
     // arithmetic IS the cost model this spike exists to measure — a real
     // deployment composes one trace for the whole statement, not one
@@ -382,7 +382,7 @@ test "float air: cost follows the widths in every format" {
         try testing.expectEqual(@as(usize, 2), sys.system().maxDegree());
         try testing.expect(!sys.system().hasBoundary());
     }
-    try testing.expectEqual(@as(usize, 108), air.constraints_per_multiply);
+    try testing.expectEqual(@as(usize, 118), air.constraints_per_multiply);
 }
 
 const TamperCase = struct {
@@ -437,18 +437,22 @@ test "float air: out-of-scope cases are refused in every format" {
         const sub: u16 = f.pack(.{ .sign = 0, .exponent = 0, .mantissa = 0 });
         const inf: u16 = f.pack(.{ .sign = 0, .exponent = f.emax(), .mantissa = 0 });
         const nan: u16 = f.pack(.{ .sign = 0, .exponent = f.emax(), .mantissa = 1 });
-        const big: u16 = f.pack(.{ .sign = 0, .exponent = f.e_normal_max(), .mantissa = 0 });
         const cases = [_][2]u16{
             .{ sub, one }, // subnormal input
             .{ one, sub },
             .{ inf, one }, // infinity
             .{ one, nan }, // NaN
-            .{ big, big }, // overflow to infinity
         };
         for (cases) |pair| {
             const one_row = [_][2]u16{pair};
             try testing.expectError(error.UnsupportedCase, air.buildTrace(a, &one_row, f));
         }
+        // A result that underflows to a subnormal is still out of scope:
+        // the smallest normal times itself is below half the smallest
+        // subnormal in every format here.
+        const tiny: u16 = f.pack(.{ .sign = 0, .exponent = 1, .mantissa = 0 });
+        const tiny_pair = [_][2]u16{.{ tiny, tiny }};
+        try testing.expectError(error.UnsupportedCase, air.buildTrace(a, &tiny_pair, f));
     }
 }
 
@@ -506,7 +510,7 @@ fn checkBatch(comptime f: fmt_lib.Format, pairs: []const [2]u16) !void {
 fn sweepFormat(comptime f: fmt_lib.Format) !usize {
     const mid: u16 = @intCast(f.bias);
     const mants = [_]u16{ 0, 1, f.mantImplicit() / 4, f.mantImplicit() / 2, 3 * f.mantImplicit() / 4, f.mantImplicit() - 2, f.mantImplicit() - 1 };
-    const exps = [_]u16{ mid - 3, mid - 1, mid, mid + 1, mid + 2, f.e_normal_max() };
+    const exps = [_]u16{ mid - 3, mid - 1, mid, mid + 1, mid + 2, f.e_normal_max() - 1, f.e_normal_max() };
     var batch: [8][2]u16 = undefined;
     var n: usize = 0;
     var checked: usize = 0;
@@ -516,11 +520,10 @@ fn sweepFormat(comptime f: fmt_lib.Format) !usize {
                 for (mants) |mb| {
                     const pa = f.pack(.{ .sign = 0, .exponent = ea, .mantissa = ma });
                     const pb = f.pack(.{ .sign = if (ma == 0) 1 else 0, .exponent = eb, .mantissa = mb });
-                    // Skip exactly what buildTrace refuses: a subnormal
-                    // or infinite RESULT is S2's job, not this AIR's.
+                    // Skip exactly what buildTrace refuses: a SUBNORMAL
+                    // result. An infinite one is in scope now.
                     const product = float_ref.multiply(f, pa, pb) catch continue;
-                    const pc = f.parts(product);
-                    if (pc.exponent == 0 or pc.exponent == f.emax()) continue;
+                    if (f.parts(product).exponent == 0) continue;
                     batch[n] = .{ pa, pb };
                     n += 1;
                     if (n < batch.len) continue;
@@ -536,6 +539,63 @@ fn sweepFormat(comptime f: fmt_lib.Format) !usize {
         checked += n;
     }
     return checked;
+}
+
+test "float air: overflow to infinity, and the attacks on it" {
+    const a = testing.allocator;
+    inline for (.{ F16, fmt_lib.bfloat16, fmt_lib.fp8_e4m3, fmt_lib.fp8_e5m2 }) |f| {
+        const L = air.Layout(f);
+        const max: u16 = f.pack(.{ .sign = 0, .exponent = f.e_normal_max(), .mantissa = f.mantImplicit() - 1 });
+        const bias: u16 = @intCast(f.bias);
+        const two: u16 = f.pack(.{ .sign = 0, .exponent = bias + 1, .mantissa = 0 });
+        const one: u16 = f.pack(.{ .sign = 0, .exponent = bias, .mantissa = 0 });
+        const overflows = [_][2]u16{
+            .{ max, two }, // max normal · 2 overflows
+            .{ max, max }, // and so does max · max
+            .{ max, one }, // which must NOT overflow: pinned below
+        };
+        // The first two are infinity, the third is not.
+        try checkBatch(f, overflows[0..2]);
+        try checkBatch(f, overflows[2..3]);
+
+        // The flag, the gap and the mantissa are each load-bearing: break
+        // them one at a time and the proof must fail. The gap's INVERSE is
+        // deliberately not in this list: when the gap is zero the identity
+        // `gap·inv = 1 − flag` reads `0·inv = 0`, which no value of inv can
+        // violate. That is the point of the pattern — the prover only owes
+        // an inverse when the value is non-zero — so a free inverse there is
+        // correct, not a hole.
+        const cases = [_]TamperCase{
+            .{ .name = "overflow flag", .col = L.col_overflow },
+            .{ .name = "not-overflow", .col = L.col_not_overflow },
+            .{ .name = "exponent gap", .col = L.col_exp_gap },
+            .{ .name = "output mantissa value", .col = L.col_c_mant_val },
+        };
+        // Eight rows: the FRI config's domain is 8, and a one-row trace is
+        // not something the prover accepts.
+        var pair: [8][2]u16 = undefined;
+        for (&pair, 0..) |*slot, i| slot.* = overflows[i % 2];
+        for (cases) |c| {
+            var trace = try air.buildTrace(a, &pair, f);
+            defer trace.deinit(a);
+            const before = trace.columns[c.col][0].a;
+            trace.columns[c.col][0] = if (before.isZero()) Fp2.one else Fp2.zero;
+
+            var sys = try air.buildSystem(a, trace.rows, f);
+            defer sys.deinit();
+            var pt = stark.Transcript.init(TRANSCRIPT);
+            if (stark.prove(a, &pt, .{ .rows = trace.rows, .columns = trace.columns }, sys.system(), CONFIG)) |proof| {
+                var accepted = proof;
+                accepted.deinit(a);
+                std.debug.print("{s}: a forged {s} was accepted\n", .{ f.name, c.name });
+                return error.ForgedOverflowAccepted;
+            } else |_| {}
+        }
+
+        // A signed overflow keeps the XOR sign: -max · 2 is -infinity.
+        const neg = [_][2]u16{.{ f.pack(.{ .sign = 1, .exponent = f.e_normal_max(), .mantissa = f.mantImplicit() - 1 }), two }};
+        try checkBatch(f, &neg);
+    }
 }
 
 test "float air: a sweep of every format agrees with the reference" {
