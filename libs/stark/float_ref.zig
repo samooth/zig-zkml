@@ -165,21 +165,29 @@ pub fn multiply(f: Format, a: u16, b: u16) !u16 {
         });
     }
     // exponent <= 0: the result is subnormal or zero. The subnormal
-    // encoding is m · 2^minShift with m < implicit, so the kept significand
-    // has to shift right by (1 − exponent) — the range reduction, and the
-    // one part of this operation that is NOT a single rounding step.
-    // Compute the reduction wide and clamp BEFORE narrowing: with a small
-    // exponent field (fp8 e4m3 has 4) a tiny result needs a shift far past
-    // 15, and @intCast to u4 panics instead of flushing to zero.
-    const reduction: i32 = 1 - exponent;
-    if (reduction > @as(i32, f.keptHigh()) + 2) {
-        // Below half of the smallest subnormal: flushes to zero, which is
-        // what round-to-nearest-even says.
+    // encoding is m · 2^minShift, and m is the EXACT product placed on the
+    // subnormal grid — ONE rounding, at the grid the answer is written to.
+    //
+    // The previous version rounded `kept` a second time, which is double
+    // rounding: whenever the first rounding lands exactly on a midpoint of
+    // the second, the two disagree. That is not a corner case — it is
+    // 6_459_545 of the normal x normal binary16 pairs whose result is
+    // subnormal. 0x0401 · 0x18FF is one: the exact value is
+    // 2.500486 · 2^-24, so IEEE-754 says mantissa 3, and the double
+    // rounding said 2. numpy agrees with 3.
+    const scale: i32 = f.minShift() - exact_shift;
+    // The product is below 2^(2M+2), so a scale past 2M+2 is under half
+    // the smallest subnormal and flushes to zero. Compute it wide and
+    // clamp BEFORE narrowing: with a small exponent field (fp8 e4m3 has
+    // 4) a tiny result needs a shift far past 15, and @intCast to u4
+    // panics instead of flushing to zero.
+    if (scale > @as(i32, f.mant_bits) * 2 + 2) {
         return packSpecial(f, sign, .zero);
     }
-    const reduced = roundToNearestEven(kept, @intCast(reduction));
+    std.debug.assert(scale >= 1);
+    const reduced = roundToNearestEven(product, @intCast(scale));
     if (reduced.kept >= implicit) {
-        // Rounding carried into the smallest normal.
+        // The rounding carried into the smallest normal.
         return f.pack(.{ .sign = sign, .exponent = 1, .mantissa = 0 });
     }
     return f.pack(.{
@@ -227,6 +235,74 @@ test "float ref: binary16 matches the spike's answers exactly" {
     try testing.expectEqual(canonicalNaN(f), try multiply(f, 0x7C00, 0x0000)); // inf · 0
     try testing.expectEqual(canonicalNaN(f), try multiply(f, 0x7E00, 0x3C00)); // NaN · 1
     try testing.expectEqual(@as(u16, 0x0002), try multiply(f, 0x0001, 0x4000)); // subnormal · 2
+}
+
+// The subnormal-result branch used to round the already-rounded kept
+// field a second time. That is double rounding, and it is wrong wherever
+// the first rounding lands on a midpoint of the second: 6_459_545 of the
+// normal x normal binary16 pairs whose result is subnormal. These three
+// are the ones that pinned it, checked against IEEE-754 and numpy:
+//
+//   0x0401 · 0x18FF = 2.500486 · 2^-24  ->  mantissa 3
+//   0x0401 · 0x1AFE = 3.499508 · 2^-24 ->  mantissa 3
+//   0x0401 · 0x1C7F = 4.500484 · 2^-24 ->  mantissa 5
+//
+// The double rounding said 2, 4 and 4.
+test "float ref: a subnormal result is rounded once, not twice" {
+    const f = fmt_lib.binary16;
+    try testing.expectEqual(@as(u16, 0x0003), try multiply(f, 0x0401, 0x18FF));
+    try testing.expectEqual(@as(u16, 0x0003), try multiply(f, 0x0401, 0x1AFE));
+    try testing.expectEqual(@as(u16, 0x0005), try multiply(f, 0x0401, 0x1C7F));
+    // A subnormal result that rounds UP into the smallest normal must say
+    // so with exponent 1, not with a mantissa that happens to look right.
+    try testing.expectEqual(@as(u16, 0x0400), try multiply(f, 0x0401, 0x3BFF));
+}
+
+// The subnormal-result branch against an INDEPENDENT single rounding: the
+// exact product as an integer, placed on the subnormal grid. Every normal
+// x normal binary16 pair is 1.6 billion, too many for a test, so the
+// window is where subnormal results actually live: the low exponent
+// fields, with the significands sampled across their whole range.
+test "float ref: every subnormal binary16 result matches one rounding" {
+    const f = fmt_lib.binary16;
+    var checked: usize = 0;
+    var ea: u32 = 1;
+    while (ea <= 8) : (ea += 1) {
+        var mant: u32 = 0;
+        while (mant <= 0x3FF) : (mant += 0x37) {
+            const a: u16 = @intCast((ea << 10) | mant);
+            var eb: u32 = 1;
+            while (eb <= 8) : (eb += 1) {
+                var mb: u32 = 0;
+                while (mb <= 0x3FF) : (mb += 0x5B) {
+                    const b: u16 = @intCast((eb << 10) | mb);
+                    const got = try multiply(f, a, b);
+                    const p = f.parts(got);
+                    if (p.exponent != 0) continue; // only the subnormal results
+
+                    const da = decompose(f, a);
+                    const db = decompose(f, b);
+                    const product: u64 = @as(u64, da.significand) * @as(u64, db.significand);
+                    const scale = f.minShift() - (da.shift + db.shift);
+                    if (scale > @as(i32, f.mant_bits) * 2 + 2) {
+                        try testing.expectEqual(@as(u16, 0), got);
+                    } else {
+                        const one = roundToNearestEven(product, @intCast(scale));
+                        const want: u16 = if (one.kept >= f.mantImplicit())
+                            f.pack(.{ .sign = 0, .exponent = 1, .mantissa = 0 })
+                        else
+                            f.pack(.{ .sign = 0, .exponent = 0, .mantissa = @intCast(one.kept) });
+                        if (want != got) {
+                            std.debug.print("subnormal result: {x} · {x} gave {x}, one rounding says {x}\n", .{ a, b, got, want });
+                            return error.DoubleRounding;
+                        }
+                    }
+                    checked += 1;
+                }
+            }
+        }
+    }
+    try testing.expect(checked > 1000);
 }
 
 test "float ref: 1.0 is the identity over every binary16 pattern" {
