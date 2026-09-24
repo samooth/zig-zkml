@@ -17,29 +17,39 @@
 //! over the bit columns that already exist.
 //!
 //! The one piece of genuine data dependence is NORMALISATION: the product
-//! of two significands in [2^10, 2^11) lands in [2^20, 2^22), which is
-//! 11 kept bits when it is >= 2^21 and 10 when it is not. That single bit
-//! is a witness column (`norm`), and both the round/sticky selection and
-//! the kept bits are 2-way muxes over it — degree 2, not a barrel shifter.
-//! A barrel shifter only becomes necessary for denormal range reduction
-//! (S2), which is why this is affordable here.
+//! of two significands in [2^M, 2^(M+1)) lands in [2^(2M), 2^(2M+2)),
+//! which is M+1 kept bits when it reaches 2^(2M+1) and M when it does
+//! not. That single bit is a witness column (`norm`), and the round/sticky
+//! selection and the kept bits are 2-way muxes over it — degree 2, not a
+//! barrel shifter.
 //!
-//! ## Constraint inventory (per multiply)
+//! The barrel shifter is here anyway, for RANGE REDUCTION: a subnormal
+//! product needs the kept field shifted right by `r = 1 − E₀`, and the
+//! gadget's `round` and `below` columns are exactly the two bits that
+//! shift gives up. So the whole range costs ONE rounding — the muxes pick
+//! which pair of bits the RNE reads — and not a second rounding step, which
+//! is the mistake that once cost the reference 6.4 million wrong answers.
 //!
-//!   48  booleanity of the two input patterns and the output pattern
-//!    2  input significands from the mantissa bits
-//!    2  the exponent values (a 5-bit sum cannot be multiplied directly)
-//!    4  the inputs are neither subnormal (exp != 0) nor inf/NaN (exp != 31)
-//!    1  the exact product, ONE degree-2 constraint
-//!   23  the product's own bit decomposition (reconstruction + booleanity)
-//!    1  norm = bit 21 of the product
-//!    2  round-bit mux and the sticky mux
-//!    6  two sticky ORs, via the "sum is non-zero" inverse trick
-//!   11  kept-bit muxes
-//!    4  or_sl and the increment, same inverse trick
-//!    1  carry booleanity
-//!    2  the output exponent and mantissa sums
-//!    1  the output sign
+//! ## Constraint inventory (per multiply, binary16: 258)
+//!
+//!    48  booleanity of the two input patterns and the output pattern
+//!     2  input significands from the mantissa bits
+//!     2  the exponent values (a 5-bit sum cannot be multiplied directly)
+//!     1  the exact product, ONE degree-2 constraint
+//!    23  the product's own bit decomposition (reconstruction + booleanity)
+//!     1  norm = bit 2M+1 of the product
+//!     2  round-bit mux and the sticky mux
+//!     6  two sticky ORs, via the "sum is non-zero" inverse trick
+//!    11  kept-bit muxes
+//!     4  or_sl and the increment, same inverse trick
+//!     1  carry booleanity
+//!     2  the output exponent and mantissa sums
+//!     1  the output sign
+//!    45  the classifier: two exponent gaps, six zero-or-invertible pairs,
+//!        eight class bits, four sanitised values, the four answer rules,
+//!        the exhaustiveness, and one selector constraint per output bit
+//!    86  the shift gadget at (11 bits, 4 stages) — `expected_constraints`
+//!        carries the measured per-format numbers
 //!
 //! ## Scope
 //!
@@ -160,10 +170,82 @@ pub fn Layout(comptime f: Format) type {
         pub const col_s_zero: u16 = col_s_inf + 1;
         pub const col_s_normal: u16 = col_s_zero + 1;
 
+        /// The RANGE REDUCTION for a subnormal result: a right shift of
+        /// the kept field by `r`, with the gadget's own round and sticky.
+        ///
+        /// `r` is a witness in bits, and the pin `r·(r − (1−E₀)) = 0` says
+        /// it is either no shift at all or EXACTLY the shift the exponent
+        /// asks for. That is what closes the hole a `r·(1−sub) = 0` pin
+        /// leaves: with that one, a prover shifts a subnormal product once
+        /// more than IEEE says and still satisfies every constraint.
+        ///
+        /// `not_sub` is the zero-or-invertible flag of `r`, so the label
+        /// "this is a subnormal product" IS the shift and cannot be claimed
+        /// independently of it — which a flag bound to the output's
+        /// exponent field would allow, and did.
+        pub const col_r_bits: u16 = col_s_normal + 1;
+        pub const col_r: u16 = col_r_bits + amount_bits;
+        pub const col_r_inv: u16 = col_r + 1;
+        pub const col_not_sub: u16 = col_r_inv + 1;
+        /// E₀ = ea + eb + norm − bias, the exact product's exponent field
+        /// before the mantissa's carry. A value column because the pin
+        /// multiplies it by `r`.
+        pub const col_e0: u16 = col_not_sub + 1;
+        /// The gadget's own columns. Its three output columns are the last
+        /// three of its block, and the two muxes below read the round and
+        /// below ones through new columns — the gadget writes its round
+        /// bit straight into `sticky_col`/`round_col`, so the mux needs its
+        /// own destination.
+        pub const col_barrel: u16 = col_e0 + 1;
+        pub const barrel_cost: u16 = @intCast(barrel.column_cost(.{
+            .in_base = 0,
+            .width = @intCast(f.sigBits()),
+            .amount_base = 0,
+            .amount_bits = amount_bits,
+            .out_base = 0,
+            .sticky_col = 0,
+            .round_col = 0,
+            .below_col = 0,
+            .round_bits = true,
+        }));
+        pub const col_barrel_lost: u16 = col_barrel + barrel_cost - 3;
+        pub const col_barrel_round: u16 = col_barrel + barrel_cost - 2;
+        pub const col_barrel_below: u16 = col_barrel + barrel_cost - 1;
+        /// The reduced field, and the ONE rounding: its round and sticky
+        /// are the gadget's when the row shifted, the product's own when
+        /// it did not.
+        // The gadget's LAST stage vector IS the reduced field, so it
+        // aliases col_barrel rather than costing another copy.
+        pub const col_kept_shifted: u16 = col_barrel;
+        pub const col_kept_shifted_val: u16 = col_barrel + barrel_cost;
+        pub const col_round_used: u16 = col_kept_shifted_val + 1;
+        pub const col_sticky_used: u16 = col_round_used + 1;
+
         /// The ANSWER's bits, selected from the arithmetic path's bits and
         /// the three special patterns.
-        pub const col_out: u16 = col_s_normal + 1;
+        pub const col_out: u16 = col_sticky_used + 1;
         pub const column_count: usize = col_out + width;
+
+        /// How wide the shift's witness has to be: the deepest possible
+        /// reduction is `bias − 1`, because 1 is the smallest exponent
+        /// field a normal input can carry.
+        pub const amount_bits: u16 = bitLenOf(@as(u32, @intCast(f.bias)) - 2);
+
+        /// The gadget's config in this layout's column numbers. A const,
+        /// not a function: `Bases.of` takes it as a comptime parameter, and
+        /// a function's return value is a runtime value even when every
+        /// field of it is comptime.
+        pub const barrel_cfg: barrel.Config = .{
+            .in_base = col_kept,
+            .width = @intCast(f.sigBits()),
+            .amount_base = col_r_bits,
+            .amount_bits = amount_bits,
+            .out_base = col_barrel,
+            .sticky_col = col_barrel_lost,
+            .round_col = col_barrel_round,
+            .below_col = col_barrel_below,
+            .round_bits = true,
+        };
 
         pub inline fn aBit(i: u16) u16 {
             return col_a_bits + i;
@@ -227,7 +309,15 @@ pub fn Layout(comptime f: Format) type {
 /// The shared builder, moved out of this file so the other AIRs do not
 /// reimplement the freeze-once discipline.
 const bld = @import("./air_builder.zig");
+pub const Owned = bld.Owned;
 const Builder = bld.Builder;
+const barrel = @import("barrel.zig");
+
+/// How many bits an integer needs, at comptime. `@bitLen` is not a thing
+/// in Zig 0.16 and the count shows up in the layout, so it has to be here.
+fn bitLenOf(comptime v: u32) u16 {
+    return @intCast(32 - @clz(v));
+}
 const LinTerm = bld.LinTerm;
 pub const Trace = bld.Trace;
 const FRange = bld.FRange;
@@ -243,37 +333,35 @@ fn cname(comptime fmt: []const u8, comptime args: anytype) []const u8 {
 }
 
 /// Number of constraints per multiply — the spike's headline number.
-pub const constraints_per_multiply: usize = 163;
+pub const constraints_per_multiply: usize = 258;
 
 /// The cost model, in constraints per multiply, derived from the format's
 /// widths: 2·byteWidth bit-decompositions, the product's bit-decomposition
 /// and reconstruction, the rounding witnesses, the sticky ORs, and the
 /// per-format input guards. `buildSystem` prints if the built system ever
 /// disagrees, and the test asserts it for every format.
-pub fn expected_constraints(f: Format) usize {
-    // Three bit-decompositions (a, b, c), the product's, and the kept
-    // significand's are the only width-dependent parts; the other 27 are
-    // the two significands, the two exponent reconstructions, the four
-    // exponent guards, the product and its reconstruction, norm, round,
-    // the two sticky ORs and their mux, the increment OR and its mux, the
-    // carry booleanity, and the mantissa, exponent and sign equations.
-    // The +10 over the pre-overflow 27. The old single mantissa equation is
-    // replaced, not duplicated, so the additions are: the output exponent's
-    // bit sum (+1) and its arithmetic column d0 (+1), the clamp's gap (+1)
-    // and its product (+1), the flag's gap (+1) and inverse identity (+1),
-    // the output mantissa's value (+1), the rounded-mantissa difference
-    // (+1), the not-overflow complement (+1), the gated equation (+1), and
-    // the zero mantissa on overflow (+1).
-    // 4·width + productBits + sigBits + 66, MEASURED for the four formats
-    // and pinned by the cost test. FOUR width-dependent parts, not three:
-    // the two operand bit decompositions, the OUTPUT's, the product's, the
-    // kept significand's, and the answer selector, which is one constraint
-    // per output bit. The constant is the classifier (two mantissa values,
-    // six zero-or-invertible pairs on the two exponent gaps, the two
-    // mantissa-zero flags, eight class bits, four sanitised values), the
-    // four answer rules with the exhaustiveness, the selector's gating
-    // column, and the overflow switch.
-    return 4 * @as(usize, f.byteWidth()) + f.productBits() + f.keptHigh() + 66;
+pub fn expected_constraints(comptime f: Format) usize {
+    // MEASURED for the four formats and pinned by the cost test, not
+    // derived by hand — twice now a hand-derived cost was wrong.
+    //
+    //   rest   = 4·width + productBits + sigBits + 75
+    //   gadget = sigBits·shift + (2^shift − 1) + 7·shift − 1
+    //
+    // `rest` is the whole AIR minus the shift gadget, of which nine
+    // constraints are the reduction itself: the shift's reconstruction,
+    // E₀, the pin, the zero-or-invertible pair, the reduced field's value,
+    // the two rounding-bit muxes and the overflow/shift exclusion.
+    //
+    // `gadget` is the barrel at (sigBits, shift) bits, fitted to four
+    // measurements; the per-stage breakdown does not add up to it by
+    // inspection, so the number that goes in the code is the one the build
+    // printed. `shift` is `bitLen(bias − 2)`, the deepest reduction the
+    // format can need: 4 for binary16 and e5m2, 3 for e4m3, 7 for bfloat16,
+    // whose bias is 127.
+    const shift: usize = Layout(f).amount_bits;
+    return 4 * @as(usize, f.byteWidth()) + f.productBits() + f.sigBits() + 75 +
+        @as(usize, f.sigBits()) * shift + ((@as(usize, 1) << @intCast(shift)) - 1) +
+        7 * shift - 1;
 }
 
 /// Build the fp16 multiply AIR. `rows` multiplies, one per row.
@@ -491,10 +579,90 @@ pub fn buildSystem(allocator: std.mem.Allocator, rows: usize, comptime f: Format
     // would say "no increment" exactly when RNE says "increment".
     // or_sl = sticky OR kept_lsb, by the same sum/inverse trick: two
     // booleans whose sum is non-zero exactly when the OR is 1.
+    // ---- THE RANGE REDUCTION, and then ONE rounding for the whole range.
+    //
+    // The kept field is the exact significand; a subnormal product needs
+    // it shifted right by r = 1 − E₀, and the gadget's round and below
+    // columns are exactly the bits that shift gives up. Below, a single
+    // RNE over (round_used, sticky_used) covers both cases: which pair of
+    // bits it reads is the mux on `sub`.
+    {
+        // r from its bits.
+        var bits: [1 + L.amount_bits]LinTerm = undefined;
+        bits[0] = .{ .factors = try b.one(L.col_r) };
+        for (0..L.amount_bits) |i| {
+            bits[1 + i] = .{
+                .factors = try b.one(L.col_r_bits + @as(u16, @intCast(i))),
+                .coefficient = g(kNegModPow2(@intCast(i))),
+            };
+        }
+        try b.lin("the reduction shift is its bits", .composed, &bits);
+
+        // E₀ = ea + eb + norm − bias, on the SANITISED exponents so a
+        // special row stays satisfiable (there the shift is 0 and the pin
+        // below is 0 = 0 whatever E₀ says).
+        try b.lin("the exact product's exponent field", .composed, &.{
+            .{ .factors = try b.one(L.col_e0) },
+            .{ .factors = try b.one(L.col_a_exp_eff), .coefficient = kNegOne },
+            .{ .factors = try b.one(L.col_b_exp_eff), .coefficient = kNegOne },
+            .{ .factors = try b.one(L.col_norm), .coefficient = kNegOne },
+            .{ .factors = try b.constant(g(f.bias)) },
+        });
+
+        // THE PIN: r·(r − (1−E₀)) = 0, written r·r − r + r·E₀ so both
+        // products stay degree 2. Either no shift, or the shift the
+        // exponent asks for — not a shift the prover likes.
+        try b.lin("the shift is no shift, or exactly the exponent's", .composed, &.{
+            .{ .factors = try b.pair(L.col_r, L.col_r) },
+            .{ .factors = try b.one(L.col_r), .coefficient = kNegOne },
+            .{ .factors = try b.pair(L.col_r, L.col_e0) },
+        });
+
+        // not_sub = 1 ⟺ r = 0, so `sub = 1 − not_sub` is the label and it
+        // is welded to the shift itself.
+        try b.zeroOrNonZero("the shift is zero exactly when the result is not subnormal", L.col_r, L.col_r_inv, L.col_not_sub);
+    }
+    try barrel.build(&b, L.barrel_cfg);
+
+    // The reduced field's value, from the gadget's output bits.
+    {
+        var bits: [1 + f.sigBits()]LinTerm = undefined;
+        bits[0] = .{ .factors = try b.one(L.col_kept_shifted_val) };
+        for (0..f.sigBits()) |i| {
+            bits[1 + i] = .{
+                .factors = try b.one(L.col_kept_shifted + @as(u16, @intCast(i))),
+                .coefficient = g(kNegModPow2(@intCast(i))),
+            };
+        }
+        try b.lin("the reduced significand is its bits", .composed, &bits);
+    }
+
+    // The two rounding-bit muxes. `sub` has no column of its own: the
+    // products below carry the flag, and writing sub out would only add a
+    // column and a constraint for a difference that is free.
+    const not_sub: FRange = @as(FRange, try b.one(L.col_not_sub));
+    //   round_used  = not_sub·round  + (1−not_sub)·barrel_round
+    //   sticky_used = not_sub·sticky + (1−not_sub)·barrel_below
+    // The (1−not_sub) half is written as `b − not_sub·b`, because a
+    // constant times a column is just the column and the complement term
+    // has to be a real product to be degree 2.
+    try b.lin("the rounding bit is the one the shift used", .composed, &.{
+        .{ .factors = try b.one(L.col_round_used) },
+        .{ .factors = try b.one(L.col_barrel_round), .coefficient = kNegOne },
+        .{ .factors = try b.pairOf(not_sub, @as(FRange, try b.one(L.col_round))), .coefficient = kNegOne },
+        .{ .factors = try b.pairOf(not_sub, @as(FRange, try b.one(L.col_barrel_round))) },
+    });
+    try b.lin("the sticky is the one the shift used", .composed, &.{
+        .{ .factors = try b.one(L.col_sticky_used) },
+        .{ .factors = try b.one(L.col_barrel_below), .coefficient = kNegOne },
+        .{ .factors = try b.pairOf(not_sub, @as(FRange, try b.one(L.col_sticky))), .coefficient = kNegOne },
+        .{ .factors = try b.pairOf(not_sub, @as(FRange, try b.one(L.col_barrel_below))) },
+    });
+
     try b.lin("or_sl sum", .composed, &.{
         .{ .factors = try b.one(L.col_or_sl_sum) },
-        .{ .factors = try b.one(L.col_sticky), .coefficient = kNegOne },
-        .{ .factors = try b.one(L.col_kept), .coefficient = kNegOne },
+        .{ .factors = try b.one(L.col_sticky_used), .coefficient = kNegOne },
+        .{ .factors = try b.one(L.col_kept_shifted), .coefficient = kNegOne },
     });
     try b.lin("or_sl sum · inv", .composed, &.{
         .{ .factors = try b.pair(L.col_or_sl_sum, L.col_or_sl_inv) },
@@ -506,7 +674,7 @@ pub fn buildSystem(allocator: std.mem.Allocator, rows: usize, comptime f: Format
     });
     try b.lin("inc = round · or_sl", .composed, &.{
         .{ .factors = try b.one(L.col_inc) },
-        .{ .factors = try b.pair(L.col_round, L.col_or_sl), .coefficient = kNegOne },
+        .{ .factors = try b.pair(L.col_round_used, L.col_or_sl), .coefficient = kNegOne },
     });
     try b.lin("carry is boolean", .composed, &.{
         .{ .factors = try b.pair(L.col_carry, L.col_carry) },
@@ -588,10 +756,33 @@ pub fn buildSystem(allocator: std.mem.Allocator, rows: usize, comptime f: Format
         .{ .factors = try b.one(L.col_d0) },
         .{ .factors = try b.constant(g(f.emax())), .coefficient = kNegOne },
     });
-    try b.lin("output exponent is the arithmetic one, clamped to emax", .composed, &.{
+    //   ec   = (1−sub)·d0 + sub·carry + overflow·gap0
+    //
+    // A subnormal product's exponent field is ZERO, or ONE when the
+    // reduction rounded all the way up to the min normal — and that is
+    // exactly what the mantissa's carry says, so no separate "promote"
+    // witness is needed: with sub = 1 the mantissa equation below loses its
+    // `implicit` term, which forces c_mant = 0 exactly when carry = 1.
+    //
+    // The `overflow·sub` constraint matters: without it a prover could set
+    // both flags, and the clamp's gap (which is pinned to emax − d0, and
+    // d0 ≤ 1 when the row shifted) would turn a subnormal product into an
+    // infinity.
+    //   ec = (1−sub)·d0 + sub·carry + overflow·gap0
+    // and 1−sub IS not_sub, so this is
+    //   ec = not_sub·d0 + carry·(1−not_sub) + overflow·gap0
+    try b.lin("the exponent is the arithmetic one, the subnormal zero or one, clamped to emax", .composed, &.{
         .{ .factors = try b.one(L.cExpVal()) },
-        .{ .factors = try b.one(L.col_d0), .coefficient = kNegOne },
+        .{ .factors = try b.pair(L.col_d0, L.col_not_sub), .coefficient = kNegOne },
+        .{ .factors = try b.one(L.col_carry), .coefficient = kNegOne },
+        .{ .factors = try b.pair(L.col_carry, L.col_not_sub) },
         .{ .factors = try b.pair(L.col_overflow, L.col_d0_gap), .coefficient = kNegOne },
+    });
+    // overflow·(1−not_sub) = 0, written with the complement spelled out:
+    // a SHIFTED row may not claim an overflow, and an unshifted one may.
+    try b.lin("a shifted row never overflows", .composed, &.{
+        .{ .factors = try b.one(L.col_overflow) },
+        .{ .factors = try b.pair(L.col_overflow, L.col_not_sub), .coefficient = kNegOne },
     });
 
     // The mantissa, and the overflow switch.
@@ -607,22 +798,26 @@ pub fn buildSystem(allocator: std.mem.Allocator, rows: usize, comptime f: Format
         }
         try b.lin("output mantissa value is its bits", .composed, &bits);
 
-        // diff = kept + inc − implicit·(1 + carry): the correctly rounded
-        // mantissa of a NORMAL result, which an overflow does not have.
-        var ts: [4 + f.sigBits()]LinTerm = undefined;
+        // diff = kept' + inc − implicit·(1−sub) − implicit·carry: the
+        // correctly rounded mantissa. `kept'` is the reduced field, which
+        // equals `kept` when the row did not shift (the gadget passes a
+        // zero shift through), so ONE equation covers the whole range.
+        var ts: [5]LinTerm = undefined;
         var n: usize = 0;
         ts[n] = .{ .factors = try b.one(L.col_diff) };
         n += 1;
-        for (0..f.sigBits()) |i| {
-            ts[n] = .{
-                .factors = try b.one(L.col_kept + @as(u16, @intCast(i))),
-                .coefficient = g(kNegModPow2(@intCast(i))),
-            };
-            n += 1;
-        }
+        ts[n] = .{ .factors = try b.one(L.col_kept_shifted_val), .coefficient = kNegOne };
+        n += 1;
         ts[n] = .{ .factors = try b.one(L.col_inc), .coefficient = kNegOne };
         n += 1;
-        ts[n] = .{ .factors = try b.constant(g(f.mantImplicit())) };
+        // implicit·not_sub: the `implicit` only exists while the row did
+        // not shift, and not_sub IS 1−sub, welded to the shift.
+        ts[n] = .{
+            .factors = try b.pairOf(
+                @as(FRange, try b.one(L.col_not_sub)),
+                @as(FRange, try b.constant(g(f.mantImplicit()))),
+            ),
+        };
         n += 1;
         // +mantImplicit·carry: a carry means the kept field reached
         // 2·mantImplicit, so the mantissa is exactly 1.0 and the equation
@@ -929,10 +1124,10 @@ fn popCount(v: u32, n: u8) u32 {
 /// on one definition instead of two copies of the formula.
 ///
 /// It is signed and it is NOT the answer: a value of 0 or less means the
-/// exact product lands in the subnormal range (or below it), which the
-/// normal path cannot represent — and which still needs refusing when the
-/// ROUNDED answer is the min normal, because the rounding that gets it
-/// there is the subnormal path that is not built yet. 0x83FF's exact
+/// exact product lands in the subnormal grid, which is where the
+/// reduction's shift `1 − E₀` comes from. A value of 1 or more means no
+/// shift at all. The two meet exactly at the min normal, where a product
+/// of this shape is itself normal. 0x83FF's exact
 /// product with 0x0400 is the case that proved the point: the answer is
 /// 0x8400, a perfectly normal number, and the AIR still could not prove
 /// it.
@@ -952,6 +1147,22 @@ pub fn buildTrace(
     allocator: std.mem.Allocator,
     pairs: []const [2]u16,
     comptime f: Format,
+) BuildTraceError!Trace {
+    return buildTraceShifted(allocator, pairs, f, 0);
+}
+
+/// A witness whose reduction shifts `delta` places further than the
+/// exponent asks for. It is NOT a valid trace and nothing but the tests
+/// should call this: it exists because the design note's first soundness
+/// hole is a prover who shifts a subnormal product once more than IEEE
+/// says, and the only way to test the pin against that is to actually
+/// build the forged witness — everything downstream of the shift
+/// recomputed, so the ONLY thing that can catch it is the pin.
+pub fn buildTraceShifted(
+    allocator: std.mem.Allocator,
+    pairs: []const [2]u16,
+    comptime f: Format,
+    shift_delta: i32,
 ) BuildTraceError!Trace {
     const L = Layout(f);
     const rows = pairs.len;
@@ -985,12 +1196,14 @@ pub fn buildTrace(
         // s_normal = 1 the exponent equation demands the arithmetic
         // exponent, which no representable result with a zero exponent
         // field has.
-        const inputs_normal = pa.exponent != 0 and pa.exponent != f.emax() and
-            pb.exponent != 0 and pb.exponent != f.emax();
-        if (inputs_normal and arithmeticExponent(f, a, b) <= 0) {
-            return BuildTraceError.UnsupportedCase;
-        }
-        if (pc.exponent == 0 and pc.mantissa != 0) return BuildTraceError.UnsupportedCase;
+        // A subnormal RESULT is in scope now: the reduction shifts the
+        // kept field, the one RNE reads the shift's own round and sticky,
+        // and the underflow to zero falls out of the same arithmetic —
+        // a shift deeper than the field saturates it to zero, which is
+        // exactly what IEEE says happens below half the min subnormal.
+        // What is still out is a subnormal INPUT: no shift can make the
+        // path's significands mean what they mean there, and the AIR would
+        // have nothing to pin them with.
         // Overflow means INFINITY, not merely an all-ones exponent: a NaN
         // answer has one too, and the "overflow has a zero mantissa"
         // constraint says exactly the difference.
@@ -1102,26 +1315,124 @@ pub fn buildTrace(
             cols[L.col_kept + @as(u16, @intCast(i))][r] = Fp2.re(Goldilocks.fromU64(bit));
             kept_sum |= bit << @intCast(i);
         }
-        const lsb: u32 = (product >> @intCast(keep)) & 1;
-        const or_sl_sum: u32 = sticky + lsb;
+        // ---- THE REDUCTION, and with it the ONE rounding.
+        //
+        // E₀ is the exact product's exponent field before the mantissa's
+        // carry, and r = 1 − E₀ is the shift a subnormal product needs.
+        // A normal product has E₀ ≥ 1, so the shift is 0 — and r = 0 is
+        // also the pin's other branch, which is why the pin cannot tell
+        // "no shift" from "shift by one less than asked": it can, because
+        // the other branch is 1 − E₀ exactly.
+        const e0_signed: i64 = @as(i64, @intCast(a_exp_eff)) + @as(i64, @intCast(b_exp_eff)) +
+            @as(i64, @intCast(norm)) - @as(i64, @intCast(f.bias));
+        const e0: u64 = @intCast(@mod(e0_signed, @as(i64, @intCast(Goldilocks.p))));
+        set(cols, L.col_e0, r, e0);
+        const shift_wanted: i64 = if (e0_signed >= 1) 0 else 1 - e0_signed;
+        const shift: u32 = @intCast(@max(0, shift_wanted + shift_delta));
+        set(cols, L.col_r, r, shift);
+        trace.writeBits(L.col_r_bits, shift, L.amount_bits, r);
+        // A FIELD inverse, not the integer one: `1 / 2` is 0 as an integer
+        // and the field's 2⁻¹ is not. Nothing here can tell the difference
+        // — when the shift is non-zero the flag is zero and any inverse
+        // satisfies the identity — which is exactly why a dishonest
+        // witness is worth fixing rather than leaving.
+        cols[L.col_r_inv][r] = Fp2.re(
+            if (shift == 0) Goldilocks.zero else Goldilocks.fromU64(shift).inv() catch unreachable,
+        );
+        set(cols, L.col_not_sub, r, if (shift == 0) 1 else 0);
+
+        // The gadget's own witness: the same walk its constraints describe,
+        // so nothing here is read back out of the answer.
+        const cfg: barrel.Config = L.barrel_cfg;
+        const bases: barrel.Bases = .of(cfg);
+        var current: u64 = kept_sum;
+        var lost: u64 = 0;
+        var shift_round: u64 = 0;
+        var shift_below: u64 = 0;
+        var k: usize = 0;
+        while (k < L.amount_bits) : (k += 1) {
+            const stage: u16 = @intCast(k);
+            const bit = (shift >> @intCast(L.amount_bits - 1 - @as(u16, @intCast(k)))) & 1;
+            // u16, not u6: bfloat16's shift witness is 7 bits wide and its
+            // top stage moves 64 places, which does not fit in six.
+            const distance: u16 = @intCast(@as(u32, 1) << @intCast(L.amount_bits - 1 - stage));
+
+            var prefix_or: u64 = 0;
+            for (0..distance) |j| {
+                if ((current >> @intCast(j)) & 1 == 1) prefix_or = 1;
+                cols[bases.prefixOf(cfg, stage) + @as(u16, @intCast(j))][r] =
+                    Fp2.re(Goldilocks.fromU64(prefix_or));
+            }
+            const block_top: u64 = (current >> @intCast(distance - 1)) & 1;
+            // Clamped at 64: bfloat16's top stage moves 64 places, and a
+            // shift by the word width is what a saturating shift means.
+            const dist_capped: u6 = @min(distance, 63);
+            const rest_mask: u64 = if (distance >= 2) (@as(u64, 1) << @intCast(dist_capped - 1)) - 1 else 0;
+            const rest: u64 = if (current & rest_mask == 0) 0 else 1;
+            const prev_all: u64 = if (shift_round == 1 or shift_below == 1) 1 else 0;
+            const tail: u64 = if (prev_all == 1 or rest == 1) 1 else 0;
+            set(cols, bases.prevAllOf(stage), r, prev_all);
+            set(cols, bases.tailOf(stage), r, tail);
+            if (bit == 1) {
+                shift_round = block_top;
+                shift_below = tail;
+                const lost_mask: u64 = (@as(u64, 1) << @intCast(dist_capped)) - 1;
+                if (current & lost_mask != 0) lost = 1;
+                // A shift of 64 or more empties the field; the stage
+                // constraints say the same (every bit flushes).
+                current = if (distance >= 64) 0 else current >> @intCast(distance);
+            }
+            set(cols, bases.roundOf(cfg, stage), r, shift_round);
+            set(cols, bases.belowOf(cfg, stage), r, shift_below);
+            set(cols, bases.flagOf(stage), r, if (bit == 1) prefix_or else 0);
+            trace.writeBits(bases.vector(cfg, stage), current, cfg.width, r);
+            set(cols, bases.stickyOf(cfg, stage), r, lost);
+        }
+
+        const kept_shifted: u32 = @intCast(current);
+        trace.writeBits(L.col_kept_shifted, kept_shifted, f.sigBits(), r);
+        set(cols, L.col_kept_shifted_val, r, kept_shifted);
+        const round_used: u32 = if (shift == 0) @intCast(round) else @intCast(shift_round);
+        const sticky_used: u32 = if (shift == 0) sticky else @intCast(shift_below);
+        set(cols, L.col_round_used, r, round_used);
+        set(cols, L.col_sticky_used, r, sticky_used);
+        set(cols, L.col_barrel_lost, r, lost);
+        set(cols, L.col_barrel_round, r, shift_round);
+        set(cols, L.col_barrel_below, r, shift_below);
+
+        const lsb: u32 = kept_shifted & 1;
+        const or_sl_sum: u32 = sticky_used + lsb;
         const or_sl: u32 = if (or_sl_sum == 0) 0 else 1;
-        cols[L.col_or_sl_sum][r] = Fp2.re(Goldilocks.fromU64(or_sl_sum));
+        set(cols, L.col_or_sl_sum, r, or_sl_sum);
         cols[L.col_or_sl_inv][r] = Fp2.re(
             if (or_sl_sum == 0) Goldilocks.zero else Goldilocks.fromU64(or_sl_sum).inv() catch unreachable,
         );
-        const inc: u32 = if (round == 1 and or_sl == 1) 1 else 0;
-        const carry: u32 = if (kept_sum + inc == (@as(u32, f.mantImplicit()) << 1)) 1 else 0;
-        cols[L.col_or_sl][r] = Fp2.re(Goldilocks.fromU64(or_sl));
-        cols[L.col_inc][r] = Fp2.re(Goldilocks.fromU64(inc));
-        cols[L.col_carry][r] = Fp2.re(Goldilocks.fromU64(carry));
+        const inc: u32 = if (round_used == 1 and or_sl == 1) 1 else 0;
+        set(cols, L.col_or_sl, r, or_sl);
+        set(cols, L.col_inc, r, inc);
+        // The carry means two different things, one per branch, and the
+        // mantissa equation below is what makes them the same column:
+        //   shifted:   kept' + inc == implicit   → the count reached 1.0,
+        //              so the answer is the MIN NORMAL and its mantissa
+        //              must be zero (that is the promotion, and it needs no
+        //              witness of its own)
+        //   unshifted: kept' + inc == 2·implicit → the mantissa overflowed
+        //              into a new exponent, which is what d0 = E₀+carry
+        //              counts
+        const implicit_u: u32 = f.mantImplicit();
+        const carry_threshold: u32 = if (shift == 0) 2 * implicit_u else implicit_u;
+        const carry: u32 = if (kept_shifted + inc == carry_threshold) 1 else 0;
+        set(cols, L.col_carry, r, carry);
 
         // Overflow witness. `diff` is the correctly rounded mantissa a
         // NORMAL result would have, which an overflow does not use; the
         // output's own values come from the reference's answer, so the
         // exponent is the all-ones field exactly when the flag is set.
         const implicit: u64 = f.mantImplicit();
-        const diff_signed: i64 = @as(i64, @intCast(kept_sum)) + @as(i64, @intCast(inc)) -
-            @as(i64, @intCast(implicit)) - @as(i64, @intCast(implicit * carry));
+        const not_sub_w: u64 = if (shift == 0) 1 else 0;
+        const diff_signed: i64 = @as(i64, @intCast(kept_shifted)) + @as(i64, @intCast(inc)) -
+            @as(i64, @intCast(implicit * not_sub_w)) -
+            @as(i64, @intCast(implicit * carry));
         const diff: u64 = @intCast(@mod(diff_signed, @as(i64, @intCast(Goldilocks.p))));
         cols[L.col_diff][r] = Fp2.re(Goldilocks.fromU64(diff));
         cols[L.col_not_overflow][r] = Fp2.re(Goldilocks.fromU64(1 - overflow));

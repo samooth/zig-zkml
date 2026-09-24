@@ -73,7 +73,8 @@ pub fn column_cost(cfg: Config) usize {
     // internal sticky chain, and the caller's own sticky column.
     const base = cfg.width * stages + prefixTotal(cfg) + stages + (stages - 1) + 1;
     // With round_bits: four running columns per stage (round, prev_all,
-    // tail, below) and the caller's own two.
+    // tail, below) and the caller's own three — the sticky, the round bit
+    // and the below-round sticky, in the order they appear in Config.
     if (!cfg.round_bits) return base;
     return base + 4 * stages + 2;
 }
