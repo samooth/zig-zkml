@@ -394,7 +394,12 @@ pub fn main(init: std.process.Init) !void {
             return error.BadArgument;
         }
     }
-    if (k == 0 or !std.math.isPowerOfTwo(k + 1)) return error.BadK;
+    // The requested k does not have to be a valid shape: run() snaps it to
+    // the nearest valid one per layout and reports both. Rejecting anything
+    // but 2^m-1 here would refuse exactly the values the bench exists to
+    // report on, and the error name would be wrong besides — it is a valid
+    // request, not a bad one.
+    if (k == 0) return error.BadK;
     if (repeat == 0) repeat = 1;
 
     try run(allocator, init.io, k, repeat);
