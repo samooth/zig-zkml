@@ -282,26 +282,49 @@ subnormales, demasiado pequeños, demasiado grandes, inf y NaN.
 
 | layout | columnas | composed | prove | verify | proof |
 |---|---|---|---|---|---|
-| 1 MAC/fila (k=255) | 16 → **74** | 13 → **55** | 10.8 → **74.0 ms** | 0.37 → **1.34 ms** | 12.0 → **28.3 KiB** |
-| 16 MACs/fila (k=240) | 226 → **1346** | 193 → **865** | 16.6 → **356.4 ms** | 3.20 → **15.7 ms** | 66.1 → **381.1 KiB** |
+| 1 MAC/fila (k=255) | 16 → **74** | 13 → **55** | 10.8 → **64.7 ms** | 0.37 → **0.85 ms** | 12.0 → **28.3 KiB** |
+| 16 MACs/fila (k=240) | 226 → **1346** → **254** | 193 → **865** → **235** | 16.6 → **356** → **18.6 ms** | 3.20 → **15.7** → **2.5 ms** | 66.1 → **381** → **74.0 KiB** |
 
-El layout chunked paga 32 gadgets por fila, uno por slot, y eso se puede
-reducir 16× — a dos gadgets por fila, uno por operand family — porque **un
-chunk de 16 nunca cruza un límite de bloque**.
+La fila del chunked lleva las tres cifras porque las dos últimas columnas del
+gadget por chunk (un gadget por fila, §3.5) se escribieron después de esta
+tabla.
 
-El motivo es aritmético, no una asunción sobre los pesos. Un chunk cubre los
-MACs `[16r, 16r+16)` y un bloque de `B` elementos cubre `[Bj, Bj+B)`. El chunk
-cruza un límite sólo si algún `Bj` cae estrictamente dentro del intervalo, y
-como `B` es múltiplo de 16, todos los `Bj` lo son también. Se comprobó para
-`B ∈ {32, 64, 128, 256}` (el bloque Q4_K real y los sub-bloques de GGML): cero
-cruces en todos los casos. La consecuencia es que los 16 operandos de un chunk
-comparten bloque, y por tanto escala.
+### 3.5 Una escala por fila, no por operación
 
-**Pendiente, y no es de coste sino de alcance**: un gadget por chunk exige que
-el prover no pueda dar escalas distintas a los 16 slots de una fila, y eso hay
-que expresarlo en el sistema (una restricción de igualdad entre slots) o en el
-binder. No se ha hecho porque cambia la superficie del AIR, y el ahorro —16× en
-columnas del layout chunked— sólo se materializa al hacerlo bien.
+La primera versión corría el gadget 32 veces por fila, uno por cada par
+operando, y costaba 1346 columnas. No hacía falta, y el motivo es aritmético
+y no una asunción sobre los pesos.
+
+Un chunk cubre los MACs `[16r, 16r+16)` y un bloque de `B` elementos cubre
+`[Bj, Bj+B)`. El chunk cruza un límite sólo si algún `Bj` cae estrictamente
+dentro del intervalo, y como `B` es múltiplo de 16, todos los `Bj` lo son
+también. Comprobado para `B ∈ {32, 64, 128, 256}` — el bloque Q4_K real y
+los sub-bloques de GGML: cero cruces. Los 16 operandos de un chunk comparten
+bloque, luego comparten escala.
+
+Compartir la **columna** de escala es además la forma sound de decirlo. El
+prover no puede dar escalas distintas a los 16 slots, porque sólo hay una
+columna donde meterlas; no hacen falta constraints de igualdad y no se
+añaden. `bindOperands` sigue tomando el patrón fp16 por MAC — es lo que da el
+modelo — y rechaza un chunk cuyas escalas no sean constantes, en vez de
+promediarlo en silencio y atestiguar la escala equivocada para los slots que
+discrepan.
+
+**Medido, mismo bench (`--k 256 --repeat 1`):**
+
+| layout | columnas | composed | prove | verify | proof |
+|---|---|---|---|---|---|
+| 1 MAC/fila (k=255) | 74 | 55 | 64.7 ms | 0.85 ms | 28.3 KiB |
+| 16 MACs/fila (k=240) | **254** (era 1346) | **235** (era 865) | **18.6 ms** (era 356) | **2.5 ms** (era 15.7) | **74.0 KiB** (era 381) |
+
+El chunked recupera la ventaja que tenía antes de la procedencia: prueba un
+0.29× lo que la de 1 MAC/fila, frente al 4.8× en contra que costaba el gadget
+por slot. Por MAC: 77.5 µs contra 253.8 µs.
+
+Lo que queda sin cerrar: el layout de 1 MAC/fila sigue pagando un gadget por
+fila porque **ahí sí** cada fila es un MAC distinto y puede caer en un bloque
+distinto, así que no hay nada que compartir. Bajarlo requeriría cambiar ese
+layout, no el binding.
 
 ---
 
@@ -335,7 +358,7 @@ y eso lo atrapa `s[last] = c[last]`. Los tests de
 
 ```sh
 zig build fmt
-zig build test --summary all        # 211 tests
+zig build test --summary all        # 213 tests
 zig build verify --summary all      # 14/14 pasos, ABI + Python
 zig build -Doptimize=ReleaseFast test --summary all
 zig build spike                     # auditoría FRI 3/3
@@ -353,4 +376,6 @@ Tests que cubren específicamente esta nota:
 | `chunk: the exemption, not a wall of pins, is what closes the row` | quitar la exemption reabre el ataque |
 | `quant: a fabricated scale no longer proves` | el `KNOWN GAP`, invertido |
 | `quant: tampering with a scale's provenance witness is rejected` | el AIR, no sólo el binder |
-| `chunk_binding: a scale's provenance is checked per slot, not just once` | los 32 operandos, no uno representativo |
+| `chunk_binding: a scale's provenance is checked per slot, not just once` | las dos familias de operandos, cada una con su gadget |
+| `chunk_binding: a chunk whose scales are not constant is refused` | el binder rechaza lo que el AIR no puede atestiguar |
+| `chunk_binding: one scale column per row, shared by all 16 slots` | la compartición es estructural, no una igualdad |

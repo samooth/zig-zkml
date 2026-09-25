@@ -303,3 +303,74 @@ test "chunk_binding: a scale's provenance is checked per slot, not just once" {
     var ok = try cb.bindOperands(a, &gemm, case.nib_a, case.scale_a, case.nib_b, case.scale_b);
     defer ok.deinit(a);
 }
+
+test "chunk_binding: a chunk whose scales are not constant is refused" {
+    const a = testing.allocator;
+    var case = try realCase(a);
+    defer case.deinit(a);
+    var gemm = try chunk.buildTrace(a, case.a, case.b, case.c_true);
+    defer gemm.deinit(a);
+
+    // Slot 0 of the first chunk carries fp16 1.0 and the rest carry 0.5.
+    // The AIR has one scale column per row, so this cannot be witnessed:
+    // the binder must say so rather than quietly attesting slot 0's scale
+    // for all 16.
+    const varying = try a.alloc(u16, k_macs);
+    defer a.free(varying);
+    for (0..k_macs) |i| varying[i] = case.scale_a[i];
+    varying[1] = 0x3800; // fp16 0.5
+    try testing.expectError(
+        cb.BindError.ScaleVariesWithinChunk,
+        cb.bindOperands(a, &gemm, case.nib_a, varying, case.nib_b, case.scale_b),
+    );
+
+    // The same on the B side, and on a later chunk rather than the first.
+    for (0..k_macs) |i| varying[i] = case.scale_b[i];
+    varying[chunk.slots + 3] = 0x3C01;
+    try testing.expectError(
+        cb.BindError.ScaleVariesWithinChunk,
+        cb.bindOperands(a, &gemm, case.nib_a, case.scale_a, case.nib_b, varying),
+    );
+
+    // Constant within every chunk is fine, which is what real Q4_K data
+    // looks like, so the refusal above is not a blanket one.
+    var ok = try cb.bindOperands(a, &gemm, case.nib_a, case.scale_a, case.nib_b, case.scale_b);
+    defer ok.deinit(a);
+}
+
+test "chunk_binding: one scale column per row, shared by all 16 slots" {
+    const a = testing.allocator;
+    var case = try realCase(a);
+    defer case.deinit(a);
+    var gemm = try chunk.buildTrace(a, case.a, case.b, case.c_true);
+    defer gemm.deinit(a);
+    var bound = try cb.bindOperands(a, &gemm, case.nib_a, case.scale_a, case.nib_b, case.scale_b);
+    defer bound.deinit(a);
+
+    // Every slot of a row reads the SAME scale column, so the layout is
+    // what enforces the sharing, not a set of equality constraints. If a
+    // future change gave each slot its own column back, this fails.
+    for (0..chunk.slots) |i| {
+        try testing.expectEqual(cb.colScaleA(0), cb.colScaleA(i));
+        try testing.expectEqual(cb.colScaleB(0), cb.colScaleB(i));
+    }
+
+    // And the gadget witness lands on the row, not on slot 0's columns:
+    // the first chunk's A scale is 1.0, so the selector picks shift 12
+    // (2^-12 * 2^10 = 1.0 needs e+12 = 12) and out is 1024 << 12.
+    const row: usize = 0;
+    const want_out = Goldilocks.fromU64(1024 << 12);
+    try testing.expect(want_out.eql(bound.columns[cb.colOutA(0)][row].a));
+    try testing.expectEqual(
+        Goldilocks.fromU64(1),
+        bound.columns[cb.colSelA(0) + 12][row].a,
+    );
+    // The B side is fp16 0.5, so shift 11 and out 1024 << 11.
+    try testing.expect(
+        Goldilocks.fromU64(1024 << 11).eql(bound.columns[cb.colOutB(0)][row].a),
+    );
+    // The closing row is exempt and carries no gadget witness.
+    const last = bound.rows - 1;
+    try testing.expect(bound.columns[cb.colOutA(0)][last].a.isZero());
+    try testing.expect(bound.columns[cb.colScaleA(0)][last].a.isZero());
+}

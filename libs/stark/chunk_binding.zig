@@ -7,21 +7,35 @@
 //!
 //! Column layout (on top of gemm_chunk's 34):
 //!
-//!   for slot i in 0..slots, 41 columns each:
+//!   for slot i in 0..slots, 10 columns each:
 //!     +0  nib_a        +1  nib_b
 //!     +2  bits_a[0..4] +6  bits_b[0..4]
-//!     +10 scale_a      +11 scale_b
-//!     +12 mant_a[0..10]        +22 sel_a[0..16]
-//!     +38 shift_a     +39 out_a  +40 sign_a
-//!     (the same block for b, starting at +0 of the next half)
 //!
-//! The five blocks after the scales are the scale-provenance gadget from
-//! `scale_air.zig`: each operand's scale is pinned to the image of
-//! `fp16ToFixedQ4_22`, not left as a free field element.
+//!   then, once per ROW (shared by all 16 slots):
+//!     scale_a, scale_b
+//!     mant_a[0..10]  sel_a[0..16]  shift_a  out_a  sign_a
+//!     mant_b[0..10]  sel_b[0..16]  shift_b  out_b  sign_b
 //!
-//! Everything is built in owned storage (the IR holds pointers): a
-//! 26-bit-wide static table per slot would be unreadable, and 16 of them
-//! worse.
+//! The two blocks are the scale-provenance gadget from `scale_air.zig`.
+//!
+//! ## Why one scale per ROW and not one per slot
+//!
+//! The first cut ran the gadget 32 times per row, once per operand, and
+//! cost 1346 columns. It is not necessary, and the reason is arithmetic
+//! rather than an assumption about the weights: a chunk covers MACs
+//! `[16r, 16r+16)` and a block of `B` elements covers `[Bj, Bj+B)`. The
+//! chunk straddles a block boundary only if some `Bj` lands strictly
+//! inside the interval, and since `B` is a multiple of 16, every `Bj` is
+//! too — so no chunk ever straddles one. Checked for B in
+//! {32, 64, 128, 256}: zero straddles. The 16 operands of a chunk
+//! therefore share a block, and so share a scale.
+//!
+//! Sharing the scale COLUMN is also the sound way to say so. A prover
+//! cannot give the 16 slots different scales, because there is only one
+//! scale column per row to put them in; no equality constraints are
+//! needed and none are added. `bindOperands` still takes the per-MAC
+//! fp16 pattern, because that is what the model provides, and refuses a
+//! chunk whose scales are not constant rather than papering over it.
 
 const std = @import("std");
 const expr = @import("./expr.zig");
@@ -39,14 +53,18 @@ pub const Factor = expr.Factor;
 pub const Goldilocks = tensor.Goldilocks;
 
 pub const gemm_columns: usize = chunk.column_count;
-/// nibble, bits, scale, then the provenance gadget: 5 mantissa bits
-/// columns of 10, 16 selector columns, and 3 singles, per operand.
+/// Per slot: nibble, its four bits, for each of the two operands.
+pub const per_slot: u16 = 10;
+/// Per row and operand family: the scale, the gadget's 10 mantissa bit
+/// columns, 16 shift selectors, and shift/out/sign.
+pub const per_row: u16 = 1 + provenance_per_operand;
 pub const provenance_per_operand: u16 = 10 + 16 + 3;
-pub const per_operand: u16 = 12 + provenance_per_operand;
-pub const per_slot: u16 = 2 * per_operand;
 pub const nibble_width: u8 = 4;
 
-pub const column_count: usize = gemm_columns + chunk.slots * per_slot;
+pub const column_count: usize = gemm_columns + chunk.slots * per_slot + 2 * per_row;
+
+/// Where the per-row block starts, after every slot's columns.
+pub const row_base: u16 = @intCast(gemm_columns + chunk.slots * per_slot);
 
 pub fn colNibA(i: usize) u16 {
     return @intCast(gemm_columns + i * per_slot);
@@ -60,63 +78,66 @@ pub fn colBitsA(i: usize) u16 {
 pub fn colBitsB(i: usize) u16 {
     return colNibA(i) + @as(u16, 6);
 }
-pub fn colScaleA(i: usize) u16 {
-    return colNibA(i) + @as(u16, 10);
+
+/// The scale every slot of a row shares, per operand family.
+pub fn colScaleA(_: usize) u16 {
+    return row_base;
 }
-pub fn colScaleB(i: usize) u16 {
-    return colNibA(i) + @as(u16, 11);
+pub fn colScaleB(_: usize) u16 {
+    return row_base + @as(u16, 1);
 }
-pub fn colMantA(i: usize) u16 {
-    return colNibA(i) + @as(u16, 12);
+pub fn colMantA(_: usize) u16 {
+    return row_base + @as(u16, 2);
+}
+pub fn colSelA(_: usize) u16 {
+    return row_base + @as(u16, 12);
+}
+pub fn colShiftA(_: usize) u16 {
+    return row_base + @as(u16, 28);
+}
+pub fn colOutA(_: usize) u16 {
+    return row_base + @as(u16, 29);
+}
+pub fn colSignA(_: usize) u16 {
+    return row_base + @as(u16, 30);
+}
+pub fn colMantB(_: usize) u16 {
+    return row_base + @as(u16, 31);
+}
+pub fn colSelB(_: usize) u16 {
+    return row_base + @as(u16, 41);
+}
+pub fn colShiftB(_: usize) u16 {
+    return row_base + @as(u16, 57);
+}
+pub fn colOutB(_: usize) u16 {
+    return row_base + @as(u16, 58);
+}
+pub fn colSignB(_: usize) u16 {
+    return row_base + @as(u16, 59);
 }
 
-pub fn colSelA(i: usize) u16 {
-    return colNibA(i) + @as(u16, 22);
-}
-pub fn colShiftA(i: usize) u16 {
-    return colNibA(i) + @as(u16, 38);
-}
-pub fn colOutA(i: usize) u16 {
-    return colNibA(i) + @as(u16, 39);
-}
-pub fn colSignA(i: usize) u16 {
-    return colNibA(i) + @as(u16, 40);
-}
-pub fn colMantB(i: usize) u16 {
-    return colNibA(i) + @as(u16, 12) + per_operand;
-}
-pub fn colSelB(i: usize) u16 {
-    return colNibA(i) + @as(u16, 22) + per_operand;
-}
-pub fn colShiftB(i: usize) u16 {
-    return colNibA(i) + @as(u16, 38) + per_operand;
-}
-pub fn colOutB(i: usize) u16 {
-    return colNibA(i) + @as(u16, 39) + per_operand;
-}
-pub fn colSignB(i: usize) u16 {
-    return colNibA(i) + @as(u16, 40) + per_operand;
-}
-
-/// Provenance gadget layout for one operand of one slot.
-pub fn cfgA(i: usize) scale_air.Config {
+/// Offset of the second family's block from the first.
+/// Provenance gadget layout for one operand family. The slot argument is
+/// ignored: the gadget is per row, not per slot.
+pub fn cfgA(_: usize) scale_air.Config {
     return .{
-        .scale = colScaleA(i),
-        .mant_base = colMantA(i),
-        .sel_base = colSelA(i),
-        .shift_col = colShiftA(i),
-        .out_col = colOutA(i),
-        .sign_col = colSignA(i),
+        .scale = colScaleA(0),
+        .mant_base = colMantA(0),
+        .sel_base = colSelA(0),
+        .shift_col = colShiftA(0),
+        .out_col = colOutA(0),
+        .sign_col = colSignA(0),
     };
 }
-pub fn cfgB(i: usize) scale_air.Config {
+pub fn cfgB(_: usize) scale_air.Config {
     return .{
-        .scale = colScaleB(i),
-        .mant_base = colMantB(i),
-        .sel_base = colSelB(i),
-        .shift_col = colShiftB(i),
-        .out_col = colOutB(i),
-        .sign_col = colSignB(i),
+        .scale = colScaleB(0),
+        .mant_base = colMantB(0),
+        .sel_base = colSelB(0),
+        .shift_col = colShiftB(0),
+        .out_col = colOutB(0),
+        .sign_col = colSignB(0),
     };
 }
 
@@ -210,12 +231,13 @@ pub fn buildSystem(allocator: std.mem.Allocator, k: usize) BuildError!BoundSyste
     // Builder because the gadget needs a comptime-known layout.
     var b = air_builder.Builder.init(allocator);
     defer b.deinit();
-    for (0..chunk.slots) |i| {
-        try scale_air.build(&b, cfgA(i));
-        try scale_air.build(&b, cfgB(i));
-    }
+    // Two gadgets for the whole system: one per operand family, shared by
+    // every slot of every row. See the module docs for why a chunk's 16
+    // operands necessarily share a scale.
+    try scale_air.build(&b, cfgA(0));
+    try scale_air.build(&b, cfgB(0));
     const n_gadget = b.count();
-    std.debug.assert(n_gadget == n_specs * (1 + scale_air.shift_count + 4));
+    std.debug.assert(n_gadget == 2 * (1 + scale_air.shift_count + 4));
 
     // Append the dequantization equations and the gadgets.
     const n = inner.constraints.len;
@@ -249,6 +271,9 @@ pub const BindError = error{
     PaddedTrace,
     /// An fp16 pattern no q4.22 scale can come from.
     BadScale,
+    /// The 16 slots of a chunk do not share one scale. The AIR has one
+    /// scale column per row, so this cannot be witnessed honestly.
+    ScaleVariesWithinChunk,
 };
 
 /// Extend a chunked GEMM trace with the quantization columns.
@@ -286,16 +311,54 @@ pub fn bindOperands(
 
     const eight = Goldilocks.fromU64(8);
     for (0..chunks) |r| {
+        // The row's scale comes from slot 0, and every other slot has to
+        // agree. A real Q4_K stream always does (see the module docs); a
+        // stream that does not is refused here rather than silently
+        // averaged, because the AIR has only one scale column for the row
+        // and would attest the wrong scale for the disagreeing slots.
+        for (1..chunk.slots) |i| {
+            if (scale_a[r * chunk.slots + i] != scale_a[r * chunk.slots]) {
+                return BindError.ScaleVariesWithinChunk;
+            }
+            if (scale_b[r * chunk.slots + i] != scale_b[r * chunk.slots]) {
+                return BindError.ScaleVariesWithinChunk;
+            }
+        }
+        const s_a = scaleFromFp16(scale_a[r * chunk.slots]) catch return BindError.BadScale;
+        const s_b = scaleFromFp16(scale_b[r * chunk.slots]) catch return BindError.BadScale;
+
+        // The gadget runs once for the whole row.
+        scale_air.writeWitness(
+            cols,
+            r,
+            colMantA(0),
+            colSelA(0),
+            colShiftA(0),
+            colOutA(0),
+            colSignA(0),
+            scale_a[r * chunk.slots],
+        ) catch return BindError.BadScale;
+        scale_air.writeWitness(
+            cols,
+            r,
+            colMantB(0),
+            colSelB(0),
+            colShiftB(0),
+            colOutB(0),
+            colSignB(0),
+            scale_b[r * chunk.slots],
+        ) catch return BindError.BadScale;
+        cols[colScaleA(0)][r] = Fp2.re(s_a);
+        cols[colScaleB(0)][r] = Fp2.re(s_b);
+
         for (0..chunk.slots) |i| {
             const idx = r * chunk.slots + i;
             const na = nib_a[idx];
             const nb = nib_b[idx];
             if (na > 15 or nb > 15) return BindError.NibbleOutOfRange;
-            bindSlot(cols, r, i, true, na, scale_a[idx]) catch return BindError.BadScale;
-            bindSlot(cols, r, i, false, nb, scale_b[idx]) catch return BindError.BadScale;
+            bindSlot(cols, r, i, true, na);
+            bindSlot(cols, r, i, false, nb);
 
-            const s_a = scaleFromFp16(scale_a[idx]) catch return BindError.BadScale;
-            const s_b = scaleFromFp16(scale_b[idx]) catch return BindError.BadScale;
             const want_a = Goldilocks.fromU64(na).sub(eight).mul(s_a);
             const want_b = Goldilocks.fromU64(nb).sub(eight).mul(s_b);
             if (!want_a.eql(gemm_trace.columns[chunk.colA(i)][r].a)) return BindError.InconsistentOperands;
@@ -310,19 +373,10 @@ pub fn bindOperands(
     return .{ .rows = rows, .columns = cols };
 }
 
-/// Write one operand's nibble, its bit expansion, its scale and the
-/// provenance witness into row `r`, slot `i`. Fails only on an fp16
-/// pattern that is not a usable q4.22 scale; the caller range-checks the
-/// nibble.
-fn bindSlot(
-    cols: [][]Fp2,
-    r: usize,
-    i: usize,
-    is_a: bool,
-    nib: u8,
-    bits: u16,
-) BindError!void {
-    const cfg = if (is_a) cfgA(i) else cfgB(i);
+/// Write one operand's nibble and its bit expansion into row `r`, slot
+/// `i`. The scale is not written here: it belongs to the row, not the
+/// slot. The caller range-checks the nibble.
+fn bindSlot(cols: [][]Fp2, r: usize, i: usize, is_a: bool, nib: u8) void {
     const nib_col = if (is_a) colNibA(i) else colNibB(i);
     const bits_col = if (is_a) colBitsA(i) else colBitsB(i);
     cols[nib_col][r] = Fp2.re(Goldilocks.fromU64(nib));
@@ -330,17 +384,6 @@ fn bindSlot(
         const shift: u3 = @intCast(bit);
         cols[bits_col + bit][r] = Fp2.re(Goldilocks.fromU64((nib >> shift) & 1));
     }
-    scale_air.writeWitness(
-        cols,
-        r,
-        cfg.mant_base,
-        cfg.sel_base,
-        cfg.shift_col,
-        cfg.out_col,
-        cfg.sign_col,
-        bits,
-    ) catch return BindError.BadScale;
-    cols[cfg.scale][r] = Fp2.re(scaleFromFp16(bits) catch return BindError.BadScale);
 }
 
 /// The single place an fp16 pattern becomes the field element the
@@ -352,26 +395,32 @@ pub fn scaleFromFp16(bits: u16) tensor.Fp16Error!Goldilocks {
 const testing = std.testing;
 
 test "chunk_binding: layout leaves no column gaps" {
-    try testing.expectEqual(@as(usize, 1346), column_count);
+    try testing.expectEqual(@as(usize, 254), column_count);
     try testing.expectEqual(@as(u16, 34), colNibA(0));
     try testing.expectEqual(@as(u16, 35), colNibB(0));
     try testing.expectEqual(@as(u16, 36), colBitsA(0));
     try testing.expectEqual(@as(u16, 40), colBitsB(0));
-    try testing.expectEqual(@as(u16, 44), colScaleA(0));
-    try testing.expectEqual(@as(u16, 45), colScaleB(0));
-    // The provenance block for A follows its scale, and B's whole block
-    // (nibble..sign, 41 columns) follows A's.
-    try testing.expectEqual(@as(u16, 46), colMantA(0));
-    try testing.expectEqual(@as(u16, 56), colSelA(0));
-    try testing.expectEqual(@as(u16, 72), colShiftA(0));
-    try testing.expectEqual(@as(u16, 73), colOutA(0));
-    try testing.expectEqual(@as(u16, 74), colSignA(0));
-    try testing.expectEqual(@as(u16, 87), colMantB(0));
-    try testing.expectEqual(@as(u16, 115), colSignB(0));
-    // Every slot is 82 columns and none of them overlap.
-    try testing.expectEqual(@as(usize, 82), per_slot);
+    // Slots are 10 columns and do not overlap: B's four bits end exactly
+    // where the next slot's nibble starts.
+    try testing.expectEqual(@as(usize, 10), per_slot);
     try testing.expectEqual(colNibA(0) + per_slot, colNibA(1));
-    try testing.expect(colSignB(0) < colNibA(1));
+    try testing.expectEqual(colBitsB(0) + 4, colNibA(1));
+    // The scales and both gadgets sit after every slot, once per row.
+    try testing.expectEqual(@as(u16, 194), colScaleA(0));
+    try testing.expectEqual(@as(u16, 195), colScaleB(0));
+    try testing.expectEqual(@as(u16, 196), colMantA(0));
+    try testing.expectEqual(@as(u16, 206), colSelA(0));
+    try testing.expectEqual(@as(u16, 222), colShiftA(0));
+    try testing.expectEqual(@as(u16, 223), colOutA(0));
+    try testing.expectEqual(@as(u16, 224), colSignA(0));
+    try testing.expectEqual(@as(u16, 225), colMantB(0));
+    try testing.expectEqual(@as(u16, 235), colSelB(0));
+    try testing.expectEqual(@as(u16, 253), colSignB(0));
+    // Last slot's bits end exactly where the row block starts.
+    try testing.expectEqual(row_base, colBitsB(chunk.slots - 1) + 4);
+    // The scale accessors ignore the slot: there is one per row.
+    try testing.expectEqual(colScaleA(0), colScaleA(chunk.slots - 1));
+    try testing.expectEqual(colMantB(7), colMantB(0));
 }
 
 test "chunk_binding: the system holds every operand's range check and equation" {
@@ -381,9 +430,10 @@ test "chunk_binding: the system holds every operand's range check and equation" 
     const s = sys.system();
     // chunked AIR (3: one composed, two boundary — the closing row is
     // exempt, so its 30 unused slots need no pins) + 32 range checks x
-    // (1 + 4) + 32 dequantization equations + 32 provenance gadgets x 21.
-    try testing.expectEqual(@as(usize, 3 + 32 * 5 + 32 + 32 * 21), s.constraints.len);
-    try testing.expectEqual(@as(usize, 1 + 32 * 5 + 32 + 32 * 21), s.composedCount());
+    // (1 + 4) + 32 dequantization equations + TWO provenance gadgets
+    // (21 each), because a chunk's 16 slots share one scale.
+    try testing.expectEqual(@as(usize, 3 + 32 * 5 + 32 + 2 * 21), s.constraints.len);
+    try testing.expectEqual(@as(usize, 1 + 32 * 5 + 32 + 2 * 21), s.composedCount());
     try testing.expectEqual(@as(usize, 2), s.maxDegree());
     try testing.expectEqual(@as(usize, 1), s.transition_exemptions);
     try testing.expectEqual(@as(?u16, @intCast(column_count - 1)), s.maxColumn());
