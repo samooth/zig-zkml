@@ -5,7 +5,7 @@
 //! code would be measuring the wrong thing:
 //!
 //!   zig build bench
-//!   zig build bench -- --k 1024 --repeat 3
+//!   zig build bench -- --k 1023 --repeat 3
 //!
 //! Both layouts use the same operand binding (raw nibble + block scale), but
 //! the exact no-padding shape is different: 1 MAC/row accepts k = 2^m - 1,
@@ -375,7 +375,7 @@ pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
     const argv = try init.minimal.args.toSlice(init.arena.allocator());
 
-    var k: usize = 256;
+    var k: usize = 255;
     var repeat: usize = 3;
     var i: usize = 1;
     while (i < argv.len) : (i += 1) {
@@ -394,7 +394,7 @@ pub fn main(init: std.process.Init) !void {
             return error.BadArgument;
         }
     }
-    if (k == 0) return error.BadK;
+    if (k == 0 or !std.math.isPowerOfTwo(k + 1)) return error.BadK;
     if (repeat == 0) repeat = 1;
 
     try run(allocator, init.io, k, repeat);
