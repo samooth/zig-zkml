@@ -5,7 +5,7 @@
     .dependencies = .{
         .zig_algebra = .{
             .url = "git+https://github.com/samooth/zig-algebra#v0.3.2",
-            .hash = "zig_algebra-0.3.0-PdVS0_lXEwDYA2KjBMlC58nNnSDbZyrDhBbpDIfHsGeq",
+            .hash = "zig_algebra-0.3.2-PdVS05JfEwAc7M57KrjFSdjN2X4pIR6AxllIPzW6N85Q",
         },
         .zig_zk = .{
             .url = "git+https://github.com/samooth/zig-zk#78f265ceb5e91d3887ddfd4954261d0b5f70ed62",
