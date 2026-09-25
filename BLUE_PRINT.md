@@ -70,7 +70,7 @@ Build vs vendorear (ACTUALIZADO tras los spikes F2 — ver §12):
 
 | Pieza | Decisión |
 |---|---|
-| L0/L1 proof stack | **NO reutilizar zig-zk**: su STARK es circle-M31 (+Binius) y el FRI "genérico" de zig-algebra resultó NO ser un test de grado-bajo (auditoría empírica: datos aleatorios verifican 16/16). Construir **FRI Goldilocks propio** en `libs/fri/` (diseño Plonky3/Stone: dominio 2-ádico en F_{p²}, pliegue x↔−x, chequeo final de grado) |
+| L0/L1 proof stack | **NO reutilizar zig-zk**: su STARK es circle-M31 (+Binius) y la FRI v2 de zig-algebra 0.3.2 ya pasa la auditoría de grado-bajo, pero usa el Goldilocks upstream (p = 2^64−2^32+1), no el p = 2^61−1 de este repo. Mantener **FRI propio** en `libs/fri/` (diseño Plonky3/Stone: dominio 2-ádico en F_{p²}, pliegue x↔−x, chequeo final de grado) |
 | zig-merkle (de zig-algebra) | SÍ consumir: commitments de traza (initFromHashes/verifyPath, ~300 líneas auditables; no toca zig-transcript → sin el bug de módulos) |
 | L1 Groth16 wrapper | opcional F4, solo si on-chain; el verifier de referencia actual (scalar-mul bit a bit) es 100x demasiado lento |
 | L2/L3/L4 | construir aquí — no existe en Zig |
@@ -671,21 +671,21 @@ recalibran con el bench de F2. Los números duros de go/no-go están en §11.
 | **F4** | recursion multi-bloque sobre el statement fingerprint; Groth16 wrap solo si on-chain | el **sumcheck v2 sube a CAMINO CRÍTICO** (ROADMAP S3): sin él, probar por elemento de salida cuesta ~9 días por tile 2048×1408 y ni siquiera el AIR float (158-394 constraints por operación según el formato) es asequible | overhead GEMM < 50x; decisión de producto |
 
 Vendorear por defecto (path dep + tarball hash); fork propio en
-Se adopta upstream cuando zig-zk/zig-algebra publique tags.
+Se adopta upstream cuando zig-zk/zig-algebra publique el tag v0.3.2.
 
 ## 12. Riesgos y mitigaciones
 
 | Riesgo | Severidad | Mitigación |
 |---|---|---|
-| ~~Package manager rechaza deps (`minimum_zig_version = "0.16.0"` vs toolchain `0.16.0-dev.2535`)~~ | ~~bloquea F2~~ **RESUELTO (spike #1)** | `zig fetch --save git+https://github.com/samooth/{zig-algebra,zig-zk}` funciona sin fricción semver (commit c7cc303 / 78f265c pinneados en build.zig.zon) |
-| ~~STARK/FRI sobre Goldilocks no confirmado en zig-zk~~ | ~~alto~~ **RESUELTO (spike #2) — con hallazgo crítico** | zig-zk STARK = M31 circle-STARK (Stwo-style) + Binius: NO sirve para Goldilocks. zig-algebra expone un FRI "field-generic" PERO la auditoría empírica (`tools/fri_audit.zig`, gate `zig build spike`) demuestra que **acepta datos aleatorios 16/16** — index-pairing sin dominio RS ni chequeo final de grado: NO es un test de grado-bajo, no ancla soundness. **Decisión: FRI Goldilocks PROPIO en `libs/fri/`** (dominio subgrupo 2-ádico de F_{p²}: p+1 = 2^61 → 2-adicidad 62; p ≡ 3 mod 4 → F_{p²} = F_p[i]; pliegue canónico f_even(x²) + alpha·f_odd(x²), grado a la mitad, chequeo final de grado). Merkle de zig-algebra (`zig-merkle`, sin conflicto de módulos) se reutiliza para commitments |
-| Upstream zig-zk/zig-algebra: autor único, 0 stars, sin tags | alto (confirmado por los spikes) | dependencia SOLO de `zig-merkle` (hash + paths, ~300 líneas auditables, sin el bug de módulos zig-transcript/zig-transcript0 que rompe cualquier consumidor que importe fri+transcript); TODO lo criptográfico crítico vive en este repo |
+| ~~Package manager rechaza deps (`minimum_zig_version = "0.16.0"` vs toolchain `0.16.0-dev.2535`)~~ | ~~bloquea F2~~ **RESUELTO (spike #1)** | `zig fetch --save git+https://github.com/samooth/{zig-algebra,zig-zk}` funciona sin fricción semver (commits 52ee8b / 78f265c pinneados en build.zig.zon) |
+| ~~STARK/FRI sobre Goldilocks no confirmado en zig-zk~~ | ~~alto~~ **RESUELTO (spike #2) — con alcance de campo explícito** | zig-zk STARK = M31 circle-STARK (Stwo-style) + Binius: NO sirve para el Goldilocks de este repo. zig-algebra 0.3.2 corrige el FRI a una versión v2 canónica y `tools/fri_audit.zig` pasa 3/3; aun así usa el Goldilocks upstream (p = 2^64−2^32+1), mientras este repo usa p = 2^61−1. **Decisión: FRI Goldilocks PROPIO en `libs/fri/`** (dominio subgrupo 2-ádico de F_{p²}: p+1 = 2^61 → 2-adicidad 62; p ≡ 3 mod 4 → F_{p²} = F_p[i]; pliegue canónico f_even(x²) + alpha·f_odd(x²), grado a la mitad, chequeo final de grado). Merkle de zig-algebra (`zig-merkle`, sin conflicto de módulos) se reutiliza para commitments |
+| Upstream zig-zk/zig-algebra: un solo autor, sin tag v0.3.2 todavía (el changelog está en `main`) | medio | fijar commits exactos y hashes; mantener el consumo restringido a `zig-merkle` y auditar cualquier módulo criptográfico antes de cambiar de pin |
 | Divergencia aritmética exacta vs fast path mayor que epsilon | medio | contrato §3 + cross-check continuo por capa en CI; si diverge, el esquema no captura al kernel y se corrige el esquema (o el kernel) antes de avanzar |
 | Coste binding Poseidon2 de pesos (2–4x en layer proof) | medio | amortización por sesión (hash column una vez por (layer, expert)); bench en F3 decide |
 | Composición cross-protocol (GEMM sumcheck + AIR + lookups) | medio en F4 | v1 monolítica evita el problema hasta que el stack funciona; v2 cambia solo el gadget GEMM |
 | Groth16 wrapper zig-zk lento (scalar-mul bit a bit, sin MSM) | bajo (solo F4 on-chain) | fuera de scope si no hay caso on-chain |
 | Tests de libs no ejecutados por multi-módulo (§13.1.1) | medio (pasado) | módulo único en `zkml.zig`; gate `--summary all` con conteo explícito en CI |
-| FRI propio: bug de soundness | alto | portar el diseño de Plonky3/Stone (batalla-probado) + suite de mutación obligatoria (§13): grado-2 acepta, aleatorio/degree-128 RECHAZA (el test 2/3 de `tools/fri_audit.z` aplica igual al propio), blowup 2^4, DEEP-fri opcional post-v1 |
+| FRI propio: bug de soundness | alto | portar el diseño de Plonky3/Stone (batalla-probado) + suite de mutación obligatoria (§13): grado-2 acepta, aleatorio/degree-128 RECHAZA (el test 2/3 de `tools/fri_audit.zig` aplica igual al propio), blowup 2^4, DEEP-fri opcional post-v1 |
 
 ## 13. Test y verificación
 

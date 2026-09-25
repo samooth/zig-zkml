@@ -2,3 +2,6 @@
 zig-out
 zig-pkg
 .zig-cache
+TODO*.md
+__pycache__/
+*.pyc

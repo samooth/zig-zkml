@@ -4,8 +4,8 @@
     .version = "0.1.0",
     .dependencies = .{
         .zig_algebra = .{
-            .url = "git+https://github.com/samooth/zig-algebra#c7cc30323e7513d864990d7cae9bdae979eb6b8e",
-            .hash = "zig_algebra-0.3.0-PdVS09HBEgCz3_dLdFN_YuBsJk7_LRQSVDM2WYkCKUZg",
+            .url = "git+https://github.com/samooth/zig-algebra#v0.3.2",
+            .hash = "zig_algebra-0.3.0-PdVS0_lXEwDYA2KjBMlC58nNnSDbZyrDhBbpDIfHsGeq",
         },
         .zig_zk = .{
             .url = "git+https://github.com/samooth/zig-zk#78f265ceb5e91d3887ddfd4954261d0b5f70ed62",

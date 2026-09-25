@@ -1,79 +1,20 @@
-//! Spike: zig-algebra FRI audit — is it a real low-degree test?
+//! Spike: zig-algebra FRI v2 audit — is it a real low-degree test?
 //!
-//! zig-algebra's FRI is "index-pairing" over arbitrary array positions:
-//! the fold is layer[j] = layer[2j] + alpha*layer[2j+1] with NO evaluation
-//! domain (no coset of roots of unity, no f(x)/f(-x) mirroring) and NO
-//! final degree check. Canonical FRI derives soundness from the RS-code
-//! structure: evaluations lie on a 2-adic coset, the fold pairs x with -x,
-//! and the degree halves. Index-pairing adjacent slots with one linear
-//! challenge encodes no polynomial structure at all.
+//! FRI v2 uses the canonical 2-adic subgroup, antipodal x/-x folds,
+//! Merkle layer commitments and a final degree anchor. The audit keeps
+//! the same three gates: a low-degree polynomial must verify, arbitrary
+//! data must be rejected, and a polynomial above the configured bound
+//! must be rejected.
 //!
-//! THE GO/NO-GO TEST: random data, honestly folded and committed by the
-//! prover, must REJECT for a real low-degree test (random data is
-//! maximally far from any RS code). If it verifies, this "FRI" is only a
-//! Merkle-consistency game and cannot anchor a STARK's degree claim.
+//! The transcript is kept local so this audit exercises only the FRI
+//! interface. The field comes from zig-algebra's zig-field module.
 //!
-//! Self-contained by design: the field and transcript are defined inline
-//! (FRI takes them via comptime F / anytype), avoiding the upstream
-//! zig-transcript duplicate-module bug ("file exists in modules
-//! 'zig-transcript' and 'zig-transcript0'" — its build.zig registers the
-//! same source as two distinct modules for fri's inner import and for
-//! consumers; any consumer importing both fri and the transcript breaks).
-//!
-//! Field: Goldilocks p = 2^61-1 (BLUE_PRINT §4). Run: zig build spike
+//! Field: zig-algebra Goldilocks. Run: zig build spike
 
 const std = @import("std");
+const field = @import("zig-field");
 const fri = @import("zig-fri");
-
-/// Minimal Goldilocks p = 2^61-1 satisfying exactly the interface the FRI
-/// consumes: NUM_BYTES / toBytes / fromBytes / add / mul / eql (+ test
-/// helpers). Arithmetic mirrors libs/field.zig (lazy-reduction fold).
-const M61 = struct {
-    pub const NUM_BYTES: usize = 8;
-    pub const MODULUS: u64 = (1 << 61) - 1;
-
-    rep: u64,
-
-    pub fn fromInt(x: u64) M61 {
-        return .{ .rep = x % MODULUS };
-    }
-    pub fn zero() M61 {
-        return .{ .rep = 0 };
-    }
-    pub fn one() M61 {
-        return .{ .rep = 1 };
-    }
-    pub fn eql(a: M61, b: M61) bool {
-        return a.rep == b.rep;
-    }
-    pub fn add(a: M61, b: M61) M61 {
-        const s = a.rep + b.rep; // both < p < 2^61: single conditional sub
-        return .{ .rep = if (s >= MODULUS) s - MODULUS else s };
-    }
-    pub fn mul(a: M61, b: M61) M61 {
-        // 2^61 ≡ 1 (mod p): fold high bits into low, then subtract p at most twice.
-        const prod = @as(u128, a.rep) * @as(u128, b.rep);
-        const lo: u64 = @intCast(prod & MODULUS);
-        const hi: u64 = @intCast(prod >> 61);
-        var r = lo + hi;
-        while (r >= MODULUS) r -= MODULUS;
-        return .{ .rep = r };
-    }
-    pub fn sqr(a: M61) M61 {
-        return a.mul(a);
-    }
-    pub fn toBytes(self: M61) [NUM_BYTES]u8 {
-        var b: [NUM_BYTES]u8 = undefined;
-        std.mem.writeInt(u64, &b, self.rep, .little);
-        return b;
-    }
-    pub fn fromBytes(bytes: []const u8) !M61 {
-        if (bytes.len != NUM_BYTES) return error.InvalidLength;
-        const v = std.mem.readInt(u64, bytes[0..NUM_BYTES], .little);
-        if (v >= MODULUS) return error.OutOfField;
-        return .{ .rep = v };
-    }
-};
+const Field = field.Goldilocks;
 
 /// Fiat-Shamir transcript matching the interface FRI drives (absorbBytes /
 /// absorbField / challengeField / challengeU64). Blake3 with
@@ -125,29 +66,32 @@ pub fn main() !void {
     const allocator = debug_allocator.allocator();
 
     const n = 256;
+    const domain = fri.Domain(Field).init(Field, 8);
     const config = fri.Config{
-        .domain_size = n,
-        .final_length = 8,
+        .log_domain = 8,
+        .log_initial_degree = 7,
+        .log_final = 3,
+        .log_residual_degree = 2,
         .num_queries = 20,
     };
 
     var pass_count: usize = 0;
     var total: usize = 0;
 
-    // --- Test 1: sanity — a degree-2 polynomial (degree < final_length) ---
+    // --- Test 1: sanity — a degree-2 polynomial below the configured bound ---
     {
-        var evals: [n]M61 = undefined;
-        const c3 = M61.fromInt(3);
-        const c7 = M61.fromInt(7);
+        var evals: [n]Field = undefined;
+        const c3 = Field.fromInt(3);
+        const c7 = Field.fromInt(7);
         for (0..n) |i| {
-            const x = M61.fromInt(i);
+            const x = domain.at(i);
             evals[i] = x.sqr().add(x.mul(c3)).add(c7);
         }
         const ok = try proveAndVerify(allocator, &evals, config);
         total += 1;
         if (ok) {
             pass_count += 1;
-            std.debug.print("test 1  degree-2 poly (deg < final 8): VERIFIES (expected)\n", .{});
+            std.debug.print("test 1  degree-2 poly (below configured bound): VERIFIES (expected)\n", .{});
         } else {
             std.debug.print("test 1  degree-2 poly: REJECTS (BROKEN — even honest low-degree data fails)\n", .{});
         }
@@ -160,10 +104,10 @@ pub fn main() !void {
         var accepted: usize = 0;
         const trials = 16;
         for (0..trials) |t| {
-            var evals: [n]M61 = undefined;
+            var evals: [n]Field = undefined;
             for (0..n) |i| {
                 const r = rnd.int(u32) ^ (@as(u64, t) << 32) ^ i;
-                evals[i] = M61.fromInt(r);
+                evals[i] = Field.fromInt(r);
             }
             // Honest prover: layers derived from the data, real Merkle
             // commitments, consistent everything. A REAL low-degree test
@@ -182,19 +126,19 @@ pub fn main() !void {
         }
     }
 
-    // --- Test 3: medium degree (128 >> final_length 8), honestly proven ---
+    // --- Test 3: medium degree above the configured bound, honestly proven ---
     {
         var accepted: usize = 0;
         const trials = 16;
         for (0..trials) |t| {
-            var evals: [n]M61 = undefined;
-            const tt = M61.fromInt(t);
+            var evals: [n]Field = undefined;
+            const tt = Field.fromInt(t);
             for (0..n) |i| {
-                const x = M61.fromInt(i);
-                var acc = M61.zero();
-                var xp = M61.one();
+                const x = domain.at(i);
+                var acc = Field.zero();
+                var xp = Field.one();
                 for (0..129) |k| {
-                    const c = M61.fromInt(k *% 2654435761).add(tt);
+                    const c = Field.fromInt(k *% 2654435761).add(tt);
                     acc = acc.add(c.mul(xp));
                     xp = xp.mul(x);
                 }
@@ -204,22 +148,23 @@ pub fn main() !void {
             if (ok) accepted += 1;
         }
         total += 1;
-        std.debug.print("test 3  degree-128 data (>> final 8): {d}/{d} verified\n", .{ accepted, trials });
+        std.debug.print("test 3  degree-128 data (above configured bound): {d}/{d} verified\n", .{ accepted, trials });
         if (accepted <= 1) pass_count += 1; // allowance for a fluke
     }
 
     std.debug.print("\n=== FRI AUDIT: {d}/{d} gates passed ===\n", .{ pass_count, total });
     if (pass_count != total) {
         std.debug.print("VERDICT: zig-algebra FRI is NOT a sound low-degree test — do NOT build F2 on it.\n", .{});
+        return error.FriAuditFailed;
     } else {
         std.debug.print("VERDICT: FRI rejects non-low-degree data — viable to evaluate further.\n", .{});
     }
 }
 
-fn proveAndVerify(allocator: std.mem.Allocator, evals: []const M61, config: fri.Config) !bool {
-    var pt = FriTranscript.init("v1");
-    var proof = try fri.prove(M61, allocator, &pt, evals, config);
+fn proveAndVerify(allocator: std.mem.Allocator, evals: []const Field, config: fri.Config) !bool {
+    var pt = FriTranscript.init("v2");
+    var proof = try fri.prove(Field, allocator, &pt, evals, config);
     defer proof.deinit(allocator);
-    var vt = FriTranscript.init("v1");
-    return fri.verify(M61, &vt, &proof, config);
+    var vt = FriTranscript.init("v2");
+    return fri.verify(Field, &vt, &proof, config);
 }

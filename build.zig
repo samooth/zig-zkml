@@ -12,6 +12,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const zmerkle_mod = algebra_dep.module("zig-merkle");
+    const field_mod = algebra_dep.module("zig-field");
 
     const lib_mod = b.addModule("zig_zkml", .{
         .root_source_file = b.path("zkml.zig"),
@@ -139,14 +140,9 @@ pub fn build(b: *std.Build) void {
     verify_step.dependOn(&vllm_test.step);
 
     // --- F2 spikes -------------------------------------------------------
-    // zig-algebra exposes its libs as named modules (zig-fri, ...). The FRI
-    // audit (tools/fri_audit.zig) empirically answers whether its
-    // field-generic FRI is a sound low-degree test over OUR Goldilocks
-    // p = 2^61-1. The tool is self-contained (own field + transcript
-    // passed through FRI's comptime-F / anytype interfaces) — importing
-    // the package's zig-transcript alongside zig-fri breaks the module
-    // graph (upstream registers the same source as two modules:
-    // 'zig-transcript' and 'zig-transcript0').
+    // zig-algebra exposes its libs as named modules (zig-fri, zig-field).
+    // The audit checks the upstream FRI v2 low-degree contract with its
+    // reference field; it is a regression gate for the dependency update.
     const fri_mod = algebra_dep.module("zig-fri");
 
     const fri_audit_mod = b.createModule(.{
@@ -155,6 +151,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "zig-fri", .module = fri_mod },
+            .{ .name = "zig-field", .module = field_mod },
         },
     });
     const fri_audit_exe = b.addExecutable(.{
