@@ -183,7 +183,7 @@ pub const BuiltSystem = struct {
             .allocator = allocator,
             .constraints = merged,
             .checks = checks,
-            .system = .{ .constraints = merged },
+            .system = base.replaceConstraints(merged),
         };
     }
 

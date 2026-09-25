@@ -34,7 +34,7 @@ fn rampNibbles() [128]u8 {
 }
 
 const CONFIG_A: stark.Config = blk: {
-    // k = 16 MACs -> 16 rows + 1 closing row -> padded to 32 trace rows
+    // k = 31 MACs -> 31 data rows + 1 closing row = 32 trace rows
     // (log_trace 5), blowup 2, FRI on a 32-point quotient at rate 1/2.
     const log_trace: u6 = 5;
     const log_blowup: u6 = 2;
@@ -51,9 +51,9 @@ const CONFIG_A: stark.Config = blk: {
     };
 };
 
-/// MAC operands for k=32: two dequantized Q4_K blocks worth of elements.
+/// MAC operands for k=31: two dequantized Q4_K blocks worth of elements.
 fn operands(allocator: std.mem.Allocator) !struct { a: []Goldilocks, b: []Goldilocks } {
-    const k: usize = 16;
+    const k: usize = 31;
     const a = try allocator.alloc(Goldilocks, k);
     errdefer allocator.free(a);
     const b = try allocator.alloc(Goldilocks, k);
@@ -74,19 +74,23 @@ fn trueOutput(a: []const Goldilocks, b: []const Goldilocks) Goldilocks {
     return acc;
 }
 
+fn g(v: u64) Fp2 {
+    return Fp2.re(Goldilocks.fromU64(v));
+}
+
 test "gemm: real Q4_K reduction proves and verifies" {
     const a = testing.allocator;
-    const system = gemm_air.system();
     const ops = try operands(a);
     defer a.free(ops.a);
     defer a.free(ops.b);
+    const system = try gemm_air.system(ops.a.len);
 
     const c_true = trueOutput(ops.a, ops.b);
     try testing.expect(!c_true.isZero());
 
     var trace = try gemm_air.buildTrace(a, ops.a, ops.b, c_true);
     defer trace.deinit(a);
-    try testing.expectEqual(@as(usize, gemm_air.rowsFor(16)), trace.rows);
+    try testing.expectEqual(@as(usize, try gemm_air.rowsFor(ops.a.len)), trace.rows);
     try testing.expect(c_true.eql(gemm_air.traceOutput(&trace)));
 
     var pt = stark.Transcript.init("zkml.gemm.v1");
@@ -100,12 +104,53 @@ test "gemm: real Q4_K reduction proves and verifies" {
     try testing.expect(try stark.verify(&vt, &proof, system, CONFIG_A));
 }
 
-test "gemm: claiming a wrong output is rejected" {
+test "gemm: exact trace length is part of the statement" {
     const a = testing.allocator;
-    const system = gemm_air.system();
     const ops = try operands(a);
     defer a.free(ops.a);
     defer a.free(ops.b);
+    const system = try gemm_air.system(ops.a.len);
+    const c_true = trueOutput(ops.a, ops.b);
+    var trace = try gemm_air.buildTrace(a, ops.a, ops.b, c_true);
+    defer trace.deinit(a);
+
+    var pt = stark.Transcript.init("zkml.gemm.shape");
+    var proof = try stark.prove(a, &pt, .{
+        .rows = trace.rows,
+        .columns = trace.columns,
+    }, system, CONFIG_A);
+    defer proof.deinit(a);
+
+    var wrong = CONFIG_A;
+    wrong.log_trace += 1;
+    wrong.fri.log_domain = wrong.log_trace + wrong.log_blowup;
+    wrong.fri.log_final = wrong.log_trace + 1;
+    wrong.fri.log_residual_degree = wrong.log_trace;
+
+    var vt = stark.Transcript.init("zkml.gemm.shape");
+    try testing.expectError(stark.Error.InvalidProof, stark.verify(&vt, &proof, system, wrong));
+
+    var pt2 = stark.Transcript.init("zkml.gemm.shape");
+    try testing.expectError(
+        stark.Error.InvalidConfig,
+        stark.prove(a, &pt2, .{ .rows = trace.rows, .columns = trace.columns }, system, wrong),
+    );
+}
+
+test "gemm: unsupported reduction lengths are refused" {
+    try testing.expectError(gemm_air.BuildError.EmptyReduction, gemm_air.system(0));
+    try testing.expectEqual(@as(usize, 2), try gemm_air.rowsFor(1));
+    for ([_]usize{ 16, 17, 250 }) |k| {
+        try testing.expectError(gemm_air.BuildError.UnsupportedTraceSize, gemm_air.system(k));
+    }
+}
+
+test "gemm: claiming a wrong output is rejected" {
+    const a = testing.allocator;
+    const ops = try operands(a);
+    defer a.free(ops.a);
+    defer a.free(ops.b);
+    const system = try gemm_air.system(ops.a.len);
 
     const c_true = trueOutput(ops.a, ops.b);
     const c_lie = c_true.add(Goldilocks.one);
@@ -125,10 +170,10 @@ test "gemm: claiming a wrong output is rejected" {
 
 test "gemm: a verifier rejects a proof whose output column was edited" {
     const a = testing.allocator;
-    const system = gemm_air.system();
     const ops = try operands(a);
     defer a.free(ops.a);
     defer a.free(ops.b);
+    const system = try gemm_air.system(ops.a.len);
 
     const c_true = trueOutput(ops.a, ops.b);
     var trace = try gemm_air.buildTrace(a, ops.a, ops.b, c_true);
@@ -151,10 +196,10 @@ test "gemm: a verifier rejects a proof whose output column was edited" {
 
 test "gemm: ±1 ulp in an operand changes the attestsed output" {
     const a = testing.allocator;
-    const system = gemm_air.system();
     const ops = try operands(a);
     defer a.free(ops.a);
     defer a.free(ops.b);
+    const system = try gemm_air.system(ops.a.len);
 
     const c_true = trueOutput(ops.a, ops.b);
     const before = c_true;
@@ -184,7 +229,7 @@ test "gemm: ±1 ulp in an operand changes the attestsed output" {
 
 test "gemm: a boundary opening at the WRONG row is rejected" {
     const a = testing.allocator;
-    const n = 16;
+    const n = 31;
     const av = try a.alloc(Goldilocks, n);
     defer a.free(av);
     const bv = try a.alloc(Goldilocks, n);
@@ -199,15 +244,16 @@ test "gemm: a boundary opening at the WRONG row is rejected" {
     for (0..n) |i| total = total.add(av[i].mul(bv[i]));
     var trace = try gemm_air.buildTrace(a, av, bv, total);
     defer trace.deinit(a);
+    const system = try gemm_air.system(n);
 
     var pt = stark.Transcript.init("zkml.gemm.boundary.index");
     var proof = try stark.prove(a, &pt, .{
         .rows = trace.rows,
         .columns = trace.columns,
-    }, gemm_air.system(), CONFIG_A);
+    }, system, CONFIG_A);
     defer proof.deinit(a);
     var vt = stark.Transcript.init("zkml.gemm.boundary.index");
-    try testing.expect(try stark.verify(&vt, &proof, gemm_air.system(), CONFIG_A));
+    try testing.expect(try stark.verify(&vt, &proof, system, CONFIG_A));
 
     // The attack the pin closes: claim the boundary window lives at some
     // OTHER row. The Merkle proof still authenticates a real leaf — it is
@@ -222,7 +268,7 @@ test "gemm: a boundary opening at the WRONG row is rejected" {
     var vt2 = stark.Transcript.init("zkml.gemm.boundary.index");
     try testing.expectError(
         stark.Error.InvalidProof,
-        stark.verify(&vt2, &proof, gemm_air.system(), CONFIG_A),
+        stark.verify(&vt2, &proof, system, CONFIG_A),
     );
 
     // And the last one has to be exactly (n-1)*stride, not one row before.
@@ -231,7 +277,7 @@ test "gemm: a boundary opening at the WRONG row is rejected" {
     var vt3 = stark.Transcript.init("zkml.gemm.boundary.index");
     try testing.expectError(
         stark.Error.InvalidProof,
-        stark.verify(&vt3, &proof, gemm_air.system(), CONFIG_A),
+        stark.verify(&vt3, &proof, system, CONFIG_A),
     );
 }
 
@@ -240,11 +286,12 @@ test "gemm: the boundary constraints are what make the AIR non-vacuous" {
 
     // All-zero operands: the COMPOSED constraint s' = s - a*b is satisfied
     // by the all-zero trace, so it alone attests nothing.
-    const zero = try a.alloc(Goldilocks, 16);
+    const zero = try a.alloc(Goldilocks, 31);
     defer a.free(zero);
     @memset(zero, Goldilocks.zero);
 
     var trace = try gemm_air.buildTrace(a, zero, zero, Goldilocks.zero);
+    const system = try gemm_air.system(zero.len);
     defer trace.deinit(a);
 
     // buildTrace's closing row satisfies the boundaries, so this verifies.
@@ -252,26 +299,50 @@ test "gemm: the boundary constraints are what make the AIR non-vacuous" {
     var proof = try stark.prove(a, &pt, .{
         .rows = trace.rows,
         .columns = trace.columns,
-    }, gemm_air.system(), CONFIG_A);
+    }, system, CONFIG_A);
     defer proof.deinit(a);
     var vt = stark.Transcript.init("zkml.gemm.v1");
-    try testing.expect(try stark.verify(&vt, &proof, gemm_air.system(), CONFIG_A));
+    try testing.expect(try stark.verify(&vt, &proof, system, CONFIG_A));
 
-    // Now break ONLY the closing row's a value. The composed constraint
-    // still holds (a=0 contributes nothing and the cycle closes at 0), so
-    // the prover will happily produce a proof — but the boundary
-    // constraint a[last] = 1 fails, and the verifier rejects it. This is
-    // exactly the class of trace the composed constraint alone cannot
-    // rule out.
-    trace.columns[gemm_air.col_a][trace.rows - 1] = Fp2.zero;
-
+    // The closing row is EXEMPT, so its a and b are now free witness: any
+    // value verifies, which is the point — a synthetic row cannot be a
+    // dequantized operand, so nothing should try to constrain it.
+    const last = trace.rows - 1;
+    trace.columns[gemm_air.col_a][last] = g(1234567);
+    trace.columns[gemm_air.col_b][last] = g(7654321);
     var pt2 = stark.Transcript.init("zkml.gemm.v1");
-    var bad = try stark.prove(a, &pt2, .{
+    var loose = try stark.prove(a, &pt2, .{
         .rows = trace.rows,
         .columns = trace.columns,
-    }, gemm_air.system(), CONFIG_A);
-    defer bad.deinit(a);
-
+    }, system, CONFIG_A);
+    defer loose.deinit(a);
     var vt2 = stark.Transcript.init("zkml.gemm.v1");
-    try testing.expect(!(try stark.verify(&vt2, &bad, gemm_air.system(), CONFIG_A)));
+    try testing.expect(try stark.verify(&vt2, &loose, system, CONFIG_A));
+
+    // What is NOT free is the claim. Moving s[last] away from c[last] is
+    // the attack the boundary exists for: the composed constraint does not
+    // see it (the row is exempt), the boundary does.
+    trace.columns[gemm_air.col_s][last] = g(1);
+    var pt3 = stark.Transcript.init("zkml.gemm.v1");
+    try testing.expectError(
+        stark.Error.ConstraintViolation,
+        stark.prove(a, &pt3, .{
+            .rows = trace.rows,
+            .columns = trace.columns,
+        }, system, CONFIG_A),
+    );
+
+    // And a REAL row is not exempt: moving the running sum there breaks the
+    // telescoping, and the composed constraint catches it (the sum is read
+    // with offset +1, so row `last-1` reads s[last]).
+    trace.columns[gemm_air.col_s][last] = Fp2.zero;
+    trace.columns[gemm_air.col_s][last - 1] = g(1);
+    var pt4 = stark.Transcript.init("zkml.gemm.v1");
+    try testing.expectError(
+        stark.Error.ConstraintViolation,
+        stark.prove(a, &pt4, .{
+            .rows = trace.rows,
+            .columns = trace.columns,
+        }, system, CONFIG_A),
+    );
 }

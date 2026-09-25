@@ -230,7 +230,7 @@ pub fn freeze(allocator: std.mem.Allocator, b: *Builder, rows: usize) BuildError
         .factors = factor_buf,
         .terms = terms,
         .constraints = all,
-        .built = .{ .constraints = all },
+        .built = .{ .constraints = all, .trace_rows = rows },
     };
 }
 

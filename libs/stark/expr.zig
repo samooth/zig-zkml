@@ -152,6 +152,20 @@ pub const System = struct {
     /// logup.zig). Empty means "no lookups", which keeps every existing
     /// AIR's transcript byte-for-byte unchanged.
     lookups: []const LookupSpec = &.{},
+    /// Exact trace length; null means this AIR does not constrain shape.
+    trace_rows: ?usize = null,
+    /// Trailing rows where the COMPOSED constraints are not enforced.
+    ///
+    /// The quotient divisor becomes `(X^n - 1) / prod (X - g^(n-1-i))`,
+    /// which is Winterfell's `set_num_transition_exemptions` and its
+    /// DEFAULT of 1. It exists for the synthetic closing row of a cyclic
+    /// prefix sum: that row is not a real row of the computation, so the
+    /// per-row binding (dequant, range, scale provenance) must not apply to
+    /// it, and a witness flag cannot say "not this row" (see the plan).
+    /// Boundary constraints still pin whatever the exempt rows are read
+    /// for, and `trace_rows` still pins the domain, so nothing about the
+    /// statement's shape is relaxed.
+    transition_exemptions: usize = 0,
 
     /// Degree bound of the COMPOSED constraints only — boundary
     /// constraints never enter P, so they do not widen the blowup.
@@ -171,6 +185,15 @@ pub const System = struct {
             if (c.scope == .composed) n += 1;
         }
         return n;
+    }
+
+    pub fn replaceConstraints(self: System, constraints: []const Constraint) System {
+        return .{
+            .constraints = constraints,
+            .lookups = self.lookups,
+            .trace_rows = self.trace_rows,
+            .transition_exemptions = self.transition_exemptions,
+        };
     }
 
     pub fn hasBoundary(self: System) bool {
@@ -327,6 +350,17 @@ test "expr: system reports max degree, max column, wide offsets" {
     try testing.expectEqual(@as(usize, 3), sys.maxDegree());
     try testing.expectEqual(@as(?u16, 7), sys.maxColumn());
     try testing.expect(!sys.hasWideOffsets());
+}
+
+test "expr: replaceConstraints preserves lookups and trace shape" {
+    const constraints = [_]Constraint{};
+    const sys = System{ .constraints = &constraints, .trace_rows = 8 };
+    const replaced = sys.replaceConstraints(&constraints);
+    try testing.expectEqual(@as(?usize, 8), replaced.trace_rows);
+    try testing.expectEqual(sys.lookups.len, replaced.lookups.len);
+
+    const unconstrained = System{ .constraints = &constraints };
+    try testing.expectEqual(@as(?usize, null), unconstrained.trace_rows);
 }
 
 test "expr: wide offsets are detected" {

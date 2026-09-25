@@ -256,7 +256,7 @@ test "logup: a lookup composes with a real AIR (the GEMM system)" {
     const a = testing.allocator;
     // Prove the same Q4_K reduction as gemm_test, plus a lookup on the
     // running-sum column against a rotated copy of itself.
-    const k: usize = 8;
+    const k: usize = 7;
     const av = try a.alloc(Goldilocks, k);
     defer a.free(av);
     const bv = try a.alloc(Goldilocks, k);
@@ -272,8 +272,9 @@ test "logup: a lookup composes with a real AIR (the GEMM system)" {
 
     var pt = stark.Transcript.init("zkml.logup-gemm.v1");
     const pch = logup.drawChallenges(&pt);
-    var psys = try logup.buildSystem(a, gemm_air.system(), &requests, pch);
+    var psys = try logup.buildSystem(a, try gemm_air.system(k), &requests, pch);
     defer psys.deinit();
+    try testing.expectEqual(@as(?usize, 8), psys.system.trace_rows);
 
     // s and c are NOT permutations of each other (c is nonzero only on
     // the closing row), so this lookup must NOT verify — it pins that
@@ -285,7 +286,7 @@ test "logup: a lookup composes with a real AIR (the GEMM system)" {
     defer ext.deinit();
 
     const cfg: stark.Config = blk: {
-        const log_trace: u6 = 4;
+        const log_trace: u6 = 3;
         const log_blowup: u6 = 2;
         break :blk .{
             .log_trace = log_trace,

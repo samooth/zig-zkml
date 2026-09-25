@@ -204,7 +204,7 @@ pub fn buildSystem(
         .lookups = lookups,
         .terms = terms,
         .factors = factors,
-        .system = .{ .constraints = constraints, .lookups = lookups },
+        .system = .{ .constraints = constraints, .lookups = lookups, .trace_rows = base.trace_rows },
     };
 }
 

@@ -11,6 +11,12 @@
 > [`PLAN_MULTI_ENGINE.md`](PLAN_MULTI_ENGINE.md). Este blueprint queda
 > como especificación del core agnóstico al motor; la matriz de adapters
 > y su staging viven en ese plan.
+>
+> **Notas de diseño**: este documento dice *qué* es el sistema. El *por qué*
+> de las decisiones de soundness del F2 —el dominio cíclico, por qué la fila
+> de cierre necesita exenciones, por qué un flag no valía, y las mediciones
+> que descartaron el barrel shifter— está en
+> [`docs/soundness-operand-binding.md`](docs/soundness-operand-binding.md).
 
 ## 0. Cambios respecto a zkML.md
 
@@ -74,6 +80,40 @@ Build vs vendorear (ACTUALIZADO tras los spikes F2 — ver §12):
 | zig-merkle (de zig-algebra) | SÍ consumir: commitments de traza (initFromHashes/verifyPath, ~300 líneas auditables; no toca zig-transcript → sin el bug de módulos) |
 | L1 Groth16 wrapper | opcional F4, solo si on-chain; el verifier de referencia actual (scalar-mul bit a bit) es 100x demasiado lento |
 | L2/L3/L4 | construir aquí — no existe en Zig |
+
+### 2.1 Forma exacta del trace (decisión sound)
+
+El dominio del STARK es cíclico: una compuesta se evalúa también en la wrap.
+Por eso una constraint local no puede expresar "solo las primeras `k` filas
+cuentan"; un contador de filas reales telescopes y obliga a `0 = k`. La
+decisión es no tener relleno:
+
+- 1 MAC/fila: `rows = k + 1`, por lo que `k = 2^m - 1`.
+- 16 MACs/fila: `rows = chunks + 1`, todos los chunks llenos, por lo que
+  `k = 16·(2^m - 1)`; una reducción ragged se rechaza.
+- `System.trace_rows` forma parte de la statement. Prover y verifier
+  comprueban esa longitud; un dominio distinto se rechaza aunque las
+  constraints sean satisfechas.
+
+**Exención de la fila de cierre** (ver
+[`docs/soundness-operand-binding.md` §2](docs/soundness-operand-binding.md)
+para el razonamiento completo). La última fila es sintética: la wrap obliga
+a que aporte `−C`, así que sus operandos no son operandos del modelo. El
+divisor del cociente es `(X^n − 1)/Π(X − g^(n−1−i))` y las compuestas no se
+aplican a las últimas `k` filas — el `set_num_transition_exemptions` de
+Winterfell, con `k = 1` por defecto. Es lo que permite que el binding por fila
+sea total: antes, `b[last] = −C` tenía que ser una escala válida, y no lo es
+para ningún `C` genérico. Con la exención, el claim se lee con un boundary
+`c[last] = s[last]`, `s[last]` es la suma telescópica de las filas reales
+(todas elas sí compositionalmente vigiladas), y `prove` comprueba sus propios
+boundaries antes de emitir. `System.transition_exemptions` vale 0 por
+defecto, y `Config.validate` rechaza una `k` que el bound del residual FRI no
+cubre.
+
+Los dos conjuntos de `k` válidos son disjuntos. El bench no compara la misma
+reducción: informa la forma válida más cercana de cada layout y sus `k`. Para
+ensamblar varias piezas en una capa hacen falta public inputs y el plumbing
+de F3; no se debe presentar una suma parcial como una capa completa.
 
 ## 3. Contrato de aritmética exacta (invariante central)
 
@@ -170,7 +210,7 @@ Notas:
   asimétrico) **sigue sin implementarse**: el trabajo de F2 validó la
   pila con la variante simétrica, que es el camino real de llama.cpp
   (Q4_0) pero no Q4_K. El plan es una **capa por formato**, ordenada
-  Q4_0/Q8_0 → Q4_1 → Q4_K → MXFP4/8 (ROADMAP S4 en `TODO.md`); el
+  Q4_0/Q8_0 → Q4_1 → Q4_K → MXFP4/8 (ROADMAP S4 en §11); el
   esquema `int4_gguf_q4_k` del enum NO cambia mientras tanto.
 - **Float formats need no dequant constraints at all**: bf16→fp32 and
   fp8→fp32 are exact widenings, so for those tensors the entire cost is
@@ -208,7 +248,7 @@ Nunca constraints polinomiales de alto grado.
 > (engine + versión + variante de kernel). La universalidad entre modelos
 > se consigue; entre implementaciones de engine no, y no es una limitación
 > del prover sino un hecho sobre lo que es un motor. Ver la decisión de
-> arquitectura al principio de `TODO.md`.
+> arquitectura resumida al principio de §11.
 
 ## 5. Composición de proofs y commitments
 
@@ -658,7 +698,7 @@ recalibran con el bench de F2. Los números duros de go/no-go están en §11.
 
 > **El orden vigente no es el de esta tabla.** La tabla se conserva como
 > registro de las fases; el orden autoritativo, reorderado por lo que
-> midieron los spikes, está en el ROADMAP del `TODO.md`. En concreto el
+> midieron los spikes, está resumido en la nota siguiente. En concreto el
 > sumcheck (F4 aquí) pasa a camino crítico, y la capa de pesos por formato
 > y la fuente del witness pasan a ser requisitos de F2/F3.
 
@@ -666,7 +706,7 @@ recalibran con el bench de F2. Los números duros de go/no-go están en §11.
 |---|---|---|---|
 | **F0** | Weight attestation por motor (`zkml_attestor_*` sobre el loader de cada engine); test root estable ante reorden; `verify_weights.py` | ~~zig-algebra `merkle`~~ **HECHO**: C ABI + streaming `Builder` + wire format + `tools/verify_weights.py` (auditor INDEPENDIENTE) + gates `zig build abi`/`verify` + **adapters multi-motor HECHOS** (Stages 0–4 de `PLAN_MULTI_ENGINE.md`: `adapters/llama_cpp`, `zig_ai`, `vllm`, `ktransformers`, cada uno con su negativo y su cross-check) — pendiente: el witness del kernel real | overhead de carga < 5% (por medir en la integración) |
 | **F1** | `zkml_transcript_seed`; sampling reproducible | **HECHO (lib)**: `zkml_transcript_seed` en el ABI; adapters consumen vía contract | cero cambio en kernels |
-| **F2** | `libs/tensor` + gadget GEMM v1 (AIR chunk-16) + suite positiva/negativa vs witness exacto del motor | **tensor HECHO; FRI Goldilocks HECHO** (`libs/fri/`): F_{p²} = F_p[i] (p ≡ 3 mod 4), toro de norma 1 con orden p+1 = 2^61 (subgrupos 2-ádicos, layout natural — el antipodal x/−x está en (i, i+n/2)), pliegue canónico even/odd con 1/x = conj(x) en el toro, residual TRUNCADO a grado < 2^log_d sobre dominio final con rate < 1 (rate 1 = vacío — lección de los tests), commitments vía zig-merkle (verifyHashed — hojas pre-hashed), transcript absorbBytes/absorbField/challengeField (rejection sampling canónico). **Suite de mutación**: honesto degree-2 VERIFICA; datos aleatorios 16/16 RECHAZA; degree-128 RECHAZA. **Backend STARK HECHO** (`libs/stark/`: FFT sobre el toro de norma 1, IR de constraints, commitment, RLC, cociente, FRI, verificación en query) + binding de operandos + chunking 16 MACs + AIR de routing + núcleo LogUp + multiply float bit-exacto y genérico por formato, con zero/inf/NaN como entradas, resultados subnormales y underflow a cero, un solo redondeo en todo el rango (258/394/158/170 constraints para binary16/bf16/fp8-e4m3/fp8-e5m2, medido), ensanchamiento exacto a fp32 (48-62 constraints) y barrel shifter como gadget probado. El ORDEN del plan cambió por lo medido: ver la decisión de arquitectura y el ROADMAP al principio de `TODO.md` |
+| **F2** | `libs/tensor` + gadget GEMM v1 (AIR chunk-16) + suite positiva/negativa vs witness exacto del motor | **tensor HECHO; FRI Goldilocks HECHO** (`libs/fri/`): F_{p²} = F_p[i] (p ≡ 3 mod 4), toro de norma 1 con orden p+1 = 2^61 (subgrupos 2-ádicos, layout natural — el antipodal x/−x está en (i, i+n/2)), pliegue canónico even/odd con 1/x = conj(x) en el toro, residual TRUNCADO a grado < 2^log_d sobre dominio final con rate < 1 (rate 1 = vacío — lección de los tests), commitments vía zig-merkle (verifyHashed — hojas pre-hashed), transcript absorbBytes/absorbField/challengeField (rejection sampling canónico). **Suite de mutación**: honesto degree-2 VERIFICA; datos aleatorios 16/16 RECHAZA; degree-128 RECHAZA. **Backend STARK HECHO** (`libs/stark/`: FFT sobre el toro de norma 1, IR de constraints, commitment, RLC, cociente, FRI, verificación en query) + binding de operandos + chunking 16 MACs + AIR de routing + núcleo LogUp + multiply float bit-exacto y genérico por formato, con zero/inf/NaN como entradas, resultados subnormales y underflow a cero, un solo redondeo en todo el rango (258/394/158/170 constraints para binary16/bf16/fp8-e4m3/fp8-e5m2, medido), ensanchamiento exacto a fp32 (48-62 constraints) y barrel shifter como gadget probado. El ORDEN del plan cambió por lo medido: ver la decisión de arquitectura y el ROADMAP al principio de §11 |
 | **F3** | `zkml_prove_layer`/`zkml_verify_layer` para 1 capa (shapes reales); binding Poseidon2 traza↔leaf; bench por bloque | F2 | proof < 1 MB, verify < 100 ms, test negativo ±1 ulp RECHAZA |
 | **F4** | recursion multi-bloque sobre el statement fingerprint; Groth16 wrap solo si on-chain | el **sumcheck v2 sube a CAMINO CRÍTICO** (ROADMAP S3): sin él, probar por elemento de salida cuesta ~9 días por tile 2048×1408 y ni siquiera el AIR float (158-394 constraints por operación según el formato) es asequible | overhead GEMM < 50x; decisión de producto |
 
@@ -679,7 +719,10 @@ Se adopta upstream cuando zig-zk/zig-algebra publique el tag v0.3.2.
 |---|---|---|
 | ~~Package manager rechaza deps (`minimum_zig_version = "0.16.0"` vs toolchain `0.16.0-dev.2535`)~~ | ~~bloquea F2~~ **RESUELTO (spike #1)** | `zig fetch --save git+https://github.com/samooth/{zig-algebra,zig-zk}` funciona sin fricción semver (commits 52ee8b / 78f265c pinneados en build.zig.zon) |
 | ~~STARK/FRI sobre Goldilocks no confirmado en zig-zk~~ | ~~alto~~ **RESUELTO (spike #2) — con alcance de campo explícito** | zig-zk STARK = M31 circle-STARK (Stwo-style) + Binius: NO sirve para el Goldilocks de este repo. zig-algebra 0.3.2 corrige el FRI a una versión v2 canónica y `tools/fri_audit.zig` pasa 3/3; aun así usa el Goldilocks upstream (p = 2^64−2^32+1), mientras este repo usa p = 2^61−1. **Decisión: FRI Goldilocks PROPIO en `libs/fri/`** (dominio subgrupo 2-ádico de F_{p²}: p+1 = 2^61 → 2-adicidad 62; p ≡ 3 mod 4 → F_{p²} = F_p[i]; pliegue canónico f_even(x²) + alpha·f_odd(x²), grado a la mitad, chequeo final de grado). Merkle de zig-algebra (`zig-merkle`, sin conflicto de módulos) se reutiliza para commitments |
-| Upstream zig-zk/zig-algebra: un solo autor, sin tag v0.3.2 todavía (el changelog está en `main`) | medio | fijar commits exactos y hashes; mantener el consumo restringido a `zig-merkle` y auditar cualquier módulo criptográfico antes de cambiar de pin |
+| Upstream zig-zk/zig-algebra: un solo autor y tag v0.3.2 recién publicado (el `.version` del manifiesto upstream aún puede no coincidir) | medio | fijar tag/commit exacto y hash; mantener el consumo restringido a `zig-merkle` y auditar cualquier módulo criptográfico antes de cambiar de pin |
+| Padding o dominio de trace elegido por el prover | alto (cerrado en F2 local) | `System.trace_rows` es parte de la statement; `prove` y `verify` rechazan cualquier dominio distinto. 1 MAC/fila exige `k = 2^m−1`; chunked exige `k = 16·(2^m−1)` y rechaza ragged. Los dos sets son disjuntos, así que la agregación de una capa completa necesita el plumbing de public inputs de F3 |
+| Fila de cierre convertida en operando falsificable | alto (cerrado en F2 local) | La wrap obliga a que la última fila aporte `−C`, luego sus operandos no son del modelo y no pueden llevar binding por fila. `System.transition_exemptions` (divisor `Z_H/Π`, el mecanismo de Winterfell) exime esa fila de las compuestas, y el claim pasa a leerse de `s[last] = c[last]`. Un flag `is_last` no habría servido: one-hotness no es derivable en un dominio cíclico, y `flag·(cuadrática)` da grado 3 |
+| Escala de dequantización fabricada | alto (cerrado en F2 local) | `scale_air` (ver [`docs/`](docs/soundness-operand-binding.md) §3) prueba `u = ±(2^10+m)·2^s` con un selector one-hot de 4 bits (21 compuestas, 29 columnas por escala), en vez del barrel shifter que se medió en 131 compuestas y 157 columnas. Esto fija *qué* escala es válida, no *cuál* del modelo: atar el patrón fp16 al fichero de pesos es el commitment de F3 |
 | Divergencia aritmética exacta vs fast path mayor que epsilon | medio | contrato §3 + cross-check continuo por capa en CI; si diverge, el esquema no captura al kernel y se corrige el esquema (o el kernel) antes de avanzar |
 | Coste binding Poseidon2 de pesos (2–4x en layer proof) | medio | amortización por sesión (hash column una vez por (layer, expert)); bench en F3 decide |
 | Composición cross-protocol (GEMM sumcheck + AIR + lookups) | medio en F4 | v1 monolítica evita el problema hasta que el stack funciona; v2 cambia solo el gadget GEMM |

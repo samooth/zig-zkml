@@ -55,6 +55,7 @@ test "routing: the top-k set proves and verifies" {
     // + 16 ties + 16 selections.
     try testing.expectEqual(@as(usize, 1 + 16 * 13 + 16 * 14 + 32), system.composedCount());
     try testing.expectEqual(@as(usize, 2), system.maxDegree());
+    try testing.expectEqual(@as(?usize, experts), system.trace_rows);
     try testing.expect(system.hasBoundary()); // acc[0] = 0
 
     var trace = try routing.buildTrace(a, s[0..], k);

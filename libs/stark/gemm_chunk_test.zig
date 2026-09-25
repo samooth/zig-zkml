@@ -18,9 +18,9 @@ const testing = std.testing;
 const Goldilocks = tensor.Goldilocks;
 const Fp2 = stark.Fp2;
 
-/// One Q4_K block per operand: 256 dequantized elements, so k = 256 fills
-/// exactly 16 chunks of 16 MACs.
-const k_macs: usize = 256;
+/// One Q4_K block is reused across the reduction; k = 496 fills 31 full
+/// chunks of 16 MACs.
+const k_macs: usize = 496;
 
 const CONFIG: stark.Config = blk: {
     // 16 chunks + closing row -> 32 trace rows (log_trace 5), blowup 2.
@@ -74,8 +74,8 @@ fn realCase(allocator: std.mem.Allocator) !Case {
 
     var acc = Goldilocks.zero;
     for (0..k_macs) |i| {
-        a[i] = deq_a[i];
-        b[i] = deq_b[i];
+        a[i] = deq_a[i % 256];
+        b[i] = deq_b[i % 256];
         acc = acc.add(a[i].mul(b[i]));
     }
     return .{ .a = a, .b = b, .c_true = acc };
@@ -83,11 +83,13 @@ fn realCase(allocator: std.mem.Allocator) !Case {
 
 test "chunk: a real Q4_K reduction proves and verifies in 16x fewer rows" {
     const a = testing.allocator;
-    const system = chunk.system();
+    const system = try chunk.system(k_macs);
+    try testing.expectEqual(@as(?usize, 32), system.trace_rows);
 
-    // The whole point: same reduction, 16x shorter trace.
-    const chunked_rows = chunk.rowsFor(k_macs);
-    const per_mac_rows = gemm_air.rowsFor(k_macs);
+    // The whole point: 31 full chunks plus the closing row in 32 rows;
+    // the comparable 1-MAC shape is k=511, whose 512 rows are 16x more.
+    const chunked_rows = try chunk.rowsFor(k_macs);
+    const per_mac_rows = try gemm_air.rowsFor(511);
     try testing.expectEqual(@as(usize, 32), chunked_rows);
     try testing.expectEqual(@as(usize, 512), per_mac_rows);
     try testing.expectEqual(per_mac_rows / chunked_rows, @as(usize, 16));
@@ -113,7 +115,7 @@ test "chunk: a real Q4_K reduction proves and verifies in 16x fewer rows" {
 
 test "chunk: claiming a wrong output is rejected" {
     const a = testing.allocator;
-    const system = chunk.system();
+    const system = try chunk.system(k_macs);
     var case = try realCase(a);
     defer case.deinit(a);
 
@@ -127,47 +129,55 @@ test "chunk: claiming a wrong output is rejected" {
     );
 }
 
-test "chunk: a product parked in an unused closing slot is rejected" {
+test "chunk: a product parked in an unused closing slot cannot move the claim" {
     const a = testing.allocator;
-    const system = chunk.system();
+    const system = try chunk.system(k_macs);
     var case = try realCase(a);
     defer case.deinit(a);
 
     var trace = try chunk.buildTrace(a, case.a, case.b, case.c_true);
     defer trace.deinit(a);
 
-    // The attack: put an extra product in slot 1 of the closing row and
-    // raise the claimed output to match. The recursion forces
-    // s[last] = P (the row before it is all padding), and the composed
-    // constraint at the last row then only asks
-    //   0 = s[last] + Σ_last = P + (b₀ + a₁b₁)
-    // so setting c = P + 1 with a₁ = b₁ = 1, b₀ = -c satisfies EVERY
-    // composed constraint and both old boundary pins. The only thing left
-    // to catch it is `a₁[last] = 0`.
+    // The attack this layout once needed 30 boundary pins for: park a
+    // product in slot 1 of the closing row and raise the claim. It used to
+    // satisfy every composed constraint and both old pins, leaving only
+    // `aᵢ[last] = 0` to catch it.
+    //
+    // The closing row is now EXEMPT, so those slots are not in any equation
+    // at all — but neither is s[last], and `s[last] = c[last]` is a
+    // boundary, so moving the claim means moving the sum with it, which the
+    // telescoped data rows forbid.
     const last = trace.rows - 1;
     const forged = case.c_true.add(Goldilocks.one);
     trace.columns[chunk.colA(1)][last] = Fp2.one;
     trace.columns[chunk.colB(1)][last] = Fp2.one;
     trace.columns[chunk.col_c][last] = Fp2.re(forged);
-    trace.columns[chunk.colB(0)][last] = Fp2.re(Goldilocks.zero.sub(forged));
-
-    // The prover accepts: from the composed constraints alone this trace
-    // is indistinguishable from an honest one.
+    // s[last] is left at the true sum: the boundary now rejects.
     var pt = stark.Transcript.init("zkml.chunk.v1");
-    var proof = try stark.prove(a, &pt, .{
-        .rows = trace.rows,
-        .columns = trace.columns,
-    }, system, CONFIG);
-    defer proof.deinit(a);
+    try testing.expectError(
+        stark.Error.ConstraintViolation,
+        stark.prove(a, &pt, .{
+            .rows = trace.rows,
+            .columns = trace.columns,
+        }, system, CONFIG),
+    );
 
-    // The boundary pins reject it.
-    var vt = stark.Transcript.init("zkml.chunk.v1");
-    try testing.expect(!try stark.verify(&vt, &proof, system, CONFIG));
+    // Move the sum too, to keep the boundary happy, and the data rows no
+    // longer telescope: rejected on a composed row this time.
+    trace.columns[chunk.col_s][last] = Fp2.re(forged);
+    var pt2 = stark.Transcript.init("zkml.chunk.v1");
+    try testing.expectError(
+        stark.Error.ConstraintViolation,
+        stark.prove(a, &pt2, .{
+            .rows = trace.rows,
+            .columns = trace.columns,
+        }, system, CONFIG),
+    );
 }
 
 test "chunk: editing the authenticated output column is rejected" {
     const a = testing.allocator;
-    const system = chunk.system();
+    const system = try chunk.system(k_macs);
     var case = try realCase(a);
     defer case.deinit(a);
 
@@ -189,24 +199,19 @@ test "chunk: editing the authenticated output column is rejected" {
     try testing.expect(!try stark.verify(&vt, &proof, system, CONFIG));
 }
 
-test "chunk: the unused-slot pins are load-bearing, not decorative" {
+test "chunk: the exemption, not a wall of pins, is what closes the row" {
     const a = testing.allocator;
-    const system = chunk.system();
+    const system = try chunk.system(k_macs);
     var case = try realCase(a);
     defer case.deinit(a);
 
-    // Same attack as above, but judged against a WEAKENED system with the
-    // 30 `aᵢ/bᵢ[last] = 0` pins removed. If the forged proof verifies
-    // here, those pins are the only thing rejecting it — and a future
-    // refactor that drops them reopens a real hole.
     var trace = try chunk.buildTrace(a, case.a, case.b, case.c_true);
     defer trace.deinit(a);
     const last = trace.rows - 1;
-    const forged = case.c_true.add(Goldilocks.one);
+    // The closing row's slots are free witness now. Park a product in one
+    // and leave the honest sum: the claim does not move.
     trace.columns[chunk.colA(1)][last] = Fp2.one;
     trace.columns[chunk.colB(1)][last] = Fp2.one;
-    trace.columns[chunk.col_c][last] = Fp2.re(forged);
-    trace.columns[chunk.colB(0)][last] = Fp2.re(Goldilocks.zero.sub(forged));
 
     var pt = stark.Transcript.init("zkml.chunk.v1");
     var proof = try stark.prove(a, &pt, .{
@@ -214,48 +219,43 @@ test "chunk: the unused-slot pins are load-bearing, not decorative" {
         .columns = trace.columns,
     }, system, CONFIG);
     defer proof.deinit(a);
-
-    var weak = try a.alloc(Constraint, 0);
-    for (system.constraints) |c| {
-        if (std.mem.endsWith(u8, c.name, "[last] = 0")) continue;
-        weak = try a.realloc(weak, weak.len + 1);
-        weak[weak.len - 1] = c;
-    }
-    defer a.free(weak);
-    try testing.expectEqual(system.constraints.len - 30, weak.len);
-
     var vt = stark.Transcript.init("zkml.chunk.v1");
-    try testing.expect(try stark.verify(&vt, &proof, .{ .constraints = weak }, CONFIG));
+    try testing.expect(try stark.verify(&vt, &proof, system, CONFIG));
+
+    // Strip the exemption and the same trace is a violation: the closing
+    // row participates in the sum again and `Σ_last` must cancel. This is
+    // the property the field is load-bearing for, and the reason it is
+    // declared per-system instead of being an ambient default.
+    var without = system;
+    without.transition_exemptions = 0;
+    var pt2 = stark.Transcript.init("zkml.chunk.v1");
+    try testing.expectError(
+        stark.Error.ConstraintViolation,
+        stark.prove(a, &pt2, .{
+            .rows = trace.rows,
+            .columns = trace.columns,
+        }, without, CONFIG),
+    );
 }
 
-test "chunk: a trace with one fewer MAC still proves (ragged chunk)" {
+test "chunk: a ragged reduction is refused instead of creating hidden slots" {
     const a = testing.allocator;
-    const system = chunk.system();
     var case = try realCase(a);
     defer case.deinit(a);
 
-    // k = 250: the last chunk is half empty, so those slots must be zero
-    // rather than uninitialised. Slot 10 is real work in chunks 0..14 and
-    // absent from chunk 15 onwards (padding and the closing row).
     const k_ragged: usize = 250;
     var c_ragged = Goldilocks.zero;
     for (0..k_ragged) |i| c_ragged = c_ragged.add(case.a[i].mul(case.b[i]));
 
-    var trace = try chunk.buildTrace(a, case.a[0..k_ragged], case.b[0..k_ragged], c_ragged);
-    defer trace.deinit(a);
-    try testing.expectEqual(@as(usize, 32), trace.rows);
-    for (chunk.chunkRowsFor(k_ragged)..trace.rows) |r| {
-        try testing.expect(trace.columns[chunk.colA(10)][r].a.isZero());
-        try testing.expect(trace.columns[chunk.colB(10)][r].a.isZero());
-    }
+    try testing.expectError(
+        chunk.BuildError.RaggedReduction,
+        chunk.buildTrace(a, case.a[0..k_ragged], case.b[0..k_ragged], c_ragged),
+    );
+}
 
-    var pt = stark.Transcript.init("zkml.chunk.v1");
-    var proof = try stark.prove(a, &pt, .{
-        .rows = trace.rows,
-        .columns = trace.columns,
-    }, system, CONFIG);
-    defer proof.deinit(a);
-
-    var vt = stark.Transcript.init("zkml.chunk.v1");
-    try testing.expect(try stark.verify(&vt, &proof, system, CONFIG));
+test "chunk: unsupported reduction lengths are refused" {
+    try testing.expectError(chunk.BuildError.EmptyReduction, chunk.system(0));
+    try testing.expectError(chunk.BuildError.RaggedReduction, chunk.system(250));
+    try testing.expectError(chunk.BuildError.UnsupportedTraceSize, chunk.system(256));
+    try testing.expectError(chunk.BuildError.RaggedReduction, chunk.system(240 + 1));
 }

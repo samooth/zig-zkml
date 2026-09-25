@@ -11,18 +11,22 @@
 //! payoff is prover-side: a k=256 reduction goes from 512 trace rows to
 //! 32, so the LDE, the Merkle commitment and FRI all shrink 16×.
 //!
-//! ## Why the closing row needs 32 boundary constraints
+//! ## Why the closing row needs no boundary pins
 //!
 //! The domain is cyclic, so the last row must contribute exactly -C to
-//! close the sum (see gemm_air.zig). With one a/b pair that is two pins:
-//! `a₀[last] = 1`, `b₀[last] = -c[last]`. With 16 pairs the other 30 slots
-//! are *witness* and must be pinned to zero, or the prover can absorb an
-//! arbitrary product there and shift the attested output: the recursion
-//! only says `s[0] = s[last] + Σ_last`, and `s[last]` already contains
-//! `Σ_last`, so leaving it free lets the prover choose C. Hence one
-//! `aᵢ[last] = 0` and one `bᵢ[last] = 0` per unused slot. The verifier
-//! evaluates every boundary constraint of a scope against the single
-//! last-row opening, so this costs openings, not queries.
+//! close the sum (see gemm_air.zig). This layout used to spend 32 boundary
+//! constraints on it: `a₀[last] = 1`, `b₀[last] = -c[last]`, plus one zero
+//! pin per unused slot (30 of them), because the recursion
+//! `s[0] = s[last] + Σ_last` leaves `Σ_last` free and a prover could park a
+//! product there to move the attested output.
+//!
+//! That whole apparatus is gone. The closing row is now EXEMPT from the
+//! composed constraint (`System.transition_exemptions = 1`), so `Σ_last` is
+//! simply not part of any equation, and the output is pinned by one
+//! boundary: `s[last] = c[last]`. The sum is telescoping over rows
+//! 0..last-1, all enforced, and the unused slots on the exempt row have no
+//! equation to satisfy. Thirty-two fewer boundary constraints, and the row
+//! is finally free of operand binding (see quant_binding.zig).
 //!
 //! Trace layout:
 //!
@@ -31,10 +35,9 @@
 //!   col  32      s          running sum, s[0] = 0
 //!   col  33      c          claimed output element
 //!
-//! Operand binding (the nibble/scale constraints of quant_binding.zig) is
-//! NOT wired for this layout yet: the sound one-MAC-per-row path remains
-//! the one to use for real proofs until the chunked binding lands. TODO
-//! under F2 tracks it.
+//! Operand binding lives in `chunk_binding.zig`; the chunked layout requires
+//! k to be a multiple of `slots` and its rows to be exactly full chunks plus
+//! the closing row, so no padding or ragged slot can hide a product.
 
 const std = @import("std");
 const tensor = @import("../tensor/root.zig");
@@ -97,88 +100,41 @@ const kRunningTerms: [2 + slots]Term = blk: {
 
 const kFirstRowTerms = [_]Term{.{ .factors = kSFactors[1..2] }};
 
-const kCloseAFactors = [_]Factor{.{ .column = .{ .index = colA(0) } }};
-const kCloseATerms = [_]Term{
-    .{ .factors = kCloseAFactors[0..1] },
-    .{ .factors = &[_]Factor{.{ .constant = Fp2.one }}, .coefficient = kNegOne },
-};
-const kCloseBFactors = [_]Factor{.{ .column = .{ .index = colB(0) } }};
+/// s[last] - c[last]: the claim is read straight off the telescoped sum.
 const kCloseCFactors = [_]Factor{.{ .column = .{ .index = col_c } }};
-const kCloseBTerms = [_]Term{
-    .{ .factors = kCloseBFactors[0..1] },
-    .{ .factors = kCloseCFactors[0..1] },
+const kCloseOutputTerms = [_]Term{
+    .{ .factors = kSFactors[1..2] },
+    .{ .factors = kCloseCFactors[0..1], .coefficient = kNegOne },
 };
 
-/// One single-factor term per slot, per operand family: the `aᵢ[last] = 0`
-/// and `bᵢ[last] = 0` pins each reference one product factor of `kProdFactors`.
-const kSlotTermsA: [slots]Term = blk: {
-    var arr: [slots]Term = undefined;
-    for (0..slots) |i| arr[i] = .{ .factors = kProdFactors[i][0..1] };
-    break :blk arr;
-};
-const kSlotTermsB: [slots]Term = blk: {
-    var arr: [slots]Term = undefined;
-    for (0..slots) |i| arr[i] = .{ .factors = kProdFactors[i][1..2] };
-    break :blk arr;
+const kConstraints = [_]Constraint{
+    .{ .name = "s' - s - Σ aᵢbᵢ", .scope = .composed, .terms = &kRunningTerms },
+    .{ .name = "s[0] = 0", .scope = .boundary_first, .terms = &kFirstRowTerms },
+    .{ .name = "s[last] = c[last]", .scope = .boundary_last, .terms = &kCloseOutputTerms },
 };
 
-const kUnusedA: [slots - 1]Constraint = blk: {
-    var arr: [slots - 1]Constraint = undefined;
-    for (0..slots - 1) |i| {
-        arr[i] = .{
-            .name = std.fmt.comptimePrint("a[{d}][last] = 0", .{i + 1}),
-            .scope = .boundary_last,
-            .terms = kSlotTermsA[i + 1 .. i + 2],
-        };
-    }
-    break :blk arr;
-};
-
-const kUnusedB: [slots - 1]Constraint = blk: {
-    var arr: [slots - 1]Constraint = undefined;
-    for (0..slots - 1) |i| {
-        arr[i] = .{
-            .name = std.fmt.comptimePrint("b[{d}][last] = 0", .{i + 1}),
-            .scope = .boundary_last,
-            .terms = kSlotTermsB[i + 1 .. i + 2],
-        };
-    }
-    break :blk arr;
-};
-
-const kConstraints = blk: {
-    var arr: [4 + 2 * (slots - 1)]Constraint = undefined;
-    arr[0] = .{ .name = "s' - s - Σ aᵢbᵢ", .scope = .composed, .terms = &kRunningTerms };
-    arr[1] = .{ .name = "s[0] = 0", .scope = .boundary_first, .terms = &kFirstRowTerms };
-    arr[2] = .{ .name = "a₀[last] = 1", .scope = .boundary_last, .terms = &kCloseATerms };
-    var at: usize = 3;
-    arr[at] = .{ .name = "b₀[last] = -c[last]", .scope = .boundary_last, .terms = &kCloseBTerms };
-    at += 1;
-    for (kUnusedA) |c| {
-        arr[at] = c;
-        at += 1;
-    }
-    for (kUnusedB) |c| {
-        arr[at] = c;
-        at += 1;
-    }
-    break :blk arr;
-};
-
-pub fn system() System {
-    return .{ .constraints = &kConstraints };
+pub fn system(k: usize) BuildError!System {
+    const rows = try rowsFor(k);
+    return .{
+        .constraints = &kConstraints,
+        .trace_rows = rows,
+        .transition_exemptions = 1,
+    };
 }
 
-/// Data rows: one per chunk of `slots` MACs.
+/// Data rows: one per full chunk of `slots` MACs.
 pub fn chunkRowsFor(k: usize) usize {
-    return (k + slots - 1) / slots;
+    return k / slots;
 }
 
-/// Total trace rows: the chunk rows, the synthetic closing row, and enough
-/// zero padding to reach a power of two.
-pub fn rowsFor(k: usize) usize {
-    const needed = chunkRowsFor(k) + 1;
-    return std.math.ceilPowerOfTwo(usize, needed) catch needed;
+/// Total trace rows: full chunk rows plus the synthetic closing row. The
+/// domain must be a power of two, so k = slots * (2^m - 1).
+pub fn rowsFor(k: usize) BuildError!usize {
+    if (k == 0) return BuildError.EmptyReduction;
+    if (k % slots != 0) return BuildError.RaggedReduction;
+    const rows = chunkRowsFor(k) + 1;
+    if (!std.math.isPowerOfTwo(rows)) return BuildError.UnsupportedTraceSize;
+    return rows;
 }
 
 pub const Trace = struct {
@@ -196,6 +152,8 @@ pub const BuildError = error{
     OutOfMemory,
     EmptyReduction,
     ShortOperands,
+    RaggedReduction,
+    UnsupportedTraceSize,
 };
 
 /// Build an honest chunked trace for the output element
@@ -207,9 +165,8 @@ pub fn buildTrace(
     claimed_output: Goldilocks,
 ) BuildError!Trace {
     if (a.len == 0 or a.len != b.len) return BuildError.ShortOperands;
-    const rows = rowsFor(a.len);
+    const rows = try rowsFor(a.len);
     const chunks = chunkRowsFor(a.len);
-    if (chunks + 1 > rows) return BuildError.EmptyReduction;
 
     const cols = try allocator.alloc([]Fp2, column_count);
     errdefer allocator.free(cols);
@@ -226,29 +183,18 @@ pub fn buildTrace(
     for (0..chunks) |chunk| {
         for (0..slots) |i| {
             const idx = chunk * slots + i;
-            if (idx >= a.len) continue;
             cols[colA(i)][chunk] = Fp2.re(a[idx]);
             cols[colB(i)][chunk] = Fp2.re(b[idx]);
         }
         cols[col_s][chunk] = Fp2.re(total);
         for (0..slots) |i| {
             const idx = chunk * slots + i;
-            if (idx >= a.len) continue;
             total = total.add(a[idx].mul(b[idx]));
         }
     }
 
-    // Padding chunks between the data and the closing row: all-zero
-    // products, so the running sum holds still.
-    var pad = chunks;
-    while (pad < rows - 1) : (pad += 1) {
-        cols[col_s][pad] = Fp2.re(total);
-    }
-
-    // Closing row: one cancelling product, every other slot zero.
+    // Closing row: exempt, so the slots are zero and only s/c matter.
     const last = rows - 1;
-    cols[colA(0)][last] = Fp2.one;
-    cols[colB(0)][last] = Fp2.re(Goldilocks.zero.sub(claimed_output));
     cols[col_s][last] = Fp2.re(total);
     cols[col_c][last] = Fp2.re(claimed_output);
 
@@ -263,22 +209,23 @@ pub fn traceOutput(trace: *const Trace) Goldilocks {
 const testing = std.testing;
 
 test "chunk: layout and row counts" {
-    // k=256 -> 16 chunks -> 17 rows -> padded to 32.
-    try testing.expectEqual(@as(usize, 32), rowsFor(256));
-    try testing.expectEqual(@as(usize, 16), chunkRowsFor(256));
+    // k=240 -> 15 chunks -> 16 rows, already a power of two.
+    try testing.expectEqual(@as(usize, 16), try rowsFor(240));
+    try testing.expectEqual(@as(usize, 15), chunkRowsFor(240));
     // k=16 -> one chunk -> 2 rows, already a power of two.
-    try testing.expectEqual(@as(usize, 2), rowsFor(16));
+    try testing.expectEqual(@as(usize, 2), try rowsFor(16));
     try testing.expectEqual(@as(usize, 1), chunkRowsFor(16));
     try testing.expectEqual(@as(usize, 34), column_count);
 }
 
 test "chunk: the system is one composed constraint of degree 2" {
-    const sys = system();
+    const sys = try system(240);
     try testing.expectEqual(@as(usize, 1), sys.composedCount());
     try testing.expectEqual(@as(usize, 2), sys.maxDegree());
-    try testing.expectEqual(@as(usize, 4 + 2 * (slots - 1)), sys.constraints.len);
-    // Every unused slot is pinned at the last row: without those the
-    // prover could park a product there and move the attested output.
-    try testing.expectEqual(@as(usize, 2 * (slots - 1)), @as(usize, sys.constraints.len) - 4);
+    // Three constraints, not 34: the closing row is exempt from the
+    // composed one, so the unused slots have no pin to satisfy and the
+    // output is read off the sum by a single boundary.
+    try testing.expectEqual(@as(usize, 3), sys.constraints.len);
     try testing.expectEqual(@as(?u16, col_c), sys.maxColumn());
+    try testing.expectEqual(@as(usize, 1), sys.transition_exemptions);
 }

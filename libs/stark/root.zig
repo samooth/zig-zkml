@@ -82,6 +82,7 @@ pub const Trace = struct {
     pub fn validate(self: Trace, system: System) Error!void {
         if (self.columns.len == 0) return Error.InvalidTrace;
         if (self.rows == 0 or !std.math.isPowerOfTwo(self.rows)) return Error.InvalidTrace;
+        if (system.trace_rows) |expected| if (self.rows != expected) return Error.InvalidTrace;
         for (self.columns) |c| {
             if (c.len != self.rows) return Error.InvalidTrace;
         }
@@ -116,6 +117,25 @@ pub const Config = struct {
         // or an HONEST proof gets rejected for being "too high degree".
         if (self.fri.log_residual_degree < self.log_trace + ceilLog2(d - 1)) {
             return Error.InvalidConfig;
+        }
+        if (system.trace_rows) |expected| {
+            if ((@as(usize, 1) << self.log_trace) != expected) return Error.InvalidConfig;
+        }
+        // Each exempt row adds one degree of headroom to the quotient (P·E
+        // is one degree taller than P), so the FRI residual bound has to
+        // cover it or an HONEST proof is rejected as "too high degree".
+        // deg Q <= d*(rows-1) + k - rows, which for degree 2 and one
+        // exemption is rows-1: inside the existing bound, which is why the
+        // GEMM configs do not have to move.
+        if (system.transition_exemptions > 0) {
+            const n_rows = @as(usize, 1) << self.log_trace;
+            const deg_p = d * (n_rows -| 1);
+            const deg_q = if (deg_p + system.transition_exemptions <= n_rows)
+                0
+            else
+                deg_p + system.transition_exemptions - n_rows;
+            const bound = @as(usize, 1) << self.fri.log_residual_degree;
+            if (deg_q >= bound) return Error.InvalidConfig;
         }
         _ = self.fri.validate() catch return Error.InvalidConfig;
     }
@@ -297,6 +317,41 @@ pub fn divideByTraceVanishing(allocator: std.mem.Allocator, coeffs: []const Fp2,
     return q;
 }
 
+/// Multiply P by the transition-exemption factor `E(X) = prod (X - g^(n-1-i))`
+/// in coefficient form, in place over a buffer of length `len`.
+///
+/// The quotient is taken against `Z_H(X) / E(X)`, so `P·E = Q·Z_H` holds and
+/// `P` is only required to vanish where `E` does not, which is exactly the
+/// set of exempt rows. `c` must be the trace-domain element of row `n-1-i`.
+fn multiplyByExemptionFactor(coeffs: []Fp2, c: Fp2) void {
+    // out[i] = orig[i-1] - c*orig[i], with orig[-1] = 0. `prev` must hold
+    // the ORIGINAL coefficient: reading coeffs[i-1] here would read the
+    // value this loop already overwrote.
+    var prev: Fp2 = Fp2.zero;
+    for (coeffs) |*slot| {
+        const orig = slot.*;
+        slot.* = prev.sub(c.mul(orig));
+        prev = orig;
+    }
+}
+
+/// The same factor evaluated at a point: `prod (x - g^(n-1-i))`.
+fn exemptionFactorAt(
+    system: System,
+    log_trace: u6,
+    n: usize,
+    x: Fp2,
+) Fp2 {
+    var acc = Fp2.one;
+    if (system.transition_exemptions == 0) return acc;
+    const trace_dom = Domain.init(log_trace);
+    for (0..system.transition_exemptions) |i| {
+        const row = n - 1 - i;
+        acc = acc.mul(x.sub(trace_dom.at(@intCast(row))));
+    }
+    return acc;
+}
+
 pub fn prove(
     allocator: std.mem.Allocator,
     transcript: *Transcript,
@@ -336,6 +391,19 @@ pub fn prove(
     const p_coeffs = try allocator.dupe(Fp2, p_evals);
     defer allocator.free(p_coeffs);
     fft.toCoefficients(p_coeffs, lde_dom) catch return Error.InvalidConfig;
+
+    // Transition exemptions: multiply by E(X) = prod (X - g^(n-1-i)) BEFORE
+    // the division, so the quotient is P·E / Z_H. The buffer already has
+    // lde_n coefficients with the top ones zero, and the shift-by-one only
+    // moves data up, so no row of the LDE is disturbed and the quotient stays
+    // inside the committed LDE size.
+    if (system.transition_exemptions > 0) {
+        const trace_dom = Domain.init(config.log_trace);
+        for (0..system.transition_exemptions) |i| {
+            const row = n - 1 - i;
+            multiplyByExemptionFactor(p_coeffs, trace_dom.at(@intCast(row)));
+        }
+    }
 
     const q_coeffs = try divideByTraceVanishing(allocator, p_coeffs, n);
     defer allocator.free(q_coeffs);
@@ -382,6 +450,24 @@ pub fn prove(
         if (n > 1) {
             boundary_openings[1] = try buildOpening(allocator, columns, &tree, (n - 1) * stride, stride);
             bmade += 1;
+        }
+    }
+
+    // The prover checks its own boundary constraints before emitting a
+    // proof: with transition exemptions the closing row is no longer
+    // pinned by any composed constraint, so a wrong claim now shows up ONLY
+    // here. Emitting a proof the prover already knows is unsatisfiable just
+    // moves the failure to the verifier.
+    for (boundary_openings[0..bmade], 0..) |opening, qi| {
+        const w: Window = .{
+            .prev = opening.prev,
+            .current = opening.current,
+            .next = opening.next,
+        };
+        const want: expr.Scope = if (qi == 0) .boundary_first else .boundary_last;
+        for (system.constraints) |c| {
+            if (c.scope != want) continue;
+            if (!c.eval(w).isZero()) return Error.ConstraintViolation;
         }
     }
 
@@ -441,6 +527,7 @@ pub fn verify(
     const lde_dom = Domain.init(config.logLde());
     const lde_n = lde_dom.size();
     const n = @as(usize, 1) << config.log_trace;
+    if (system.trace_rows) |expected| if (n != expected) return Error.InvalidProof;
 
     transcript.absorbBytes(&proof.commitment.root);
     const n_composed = system.composedCount();
@@ -469,7 +556,9 @@ pub fn verify(
         const leaf = commit_lib.hashWindow(ncols, opening.prev, opening.current, opening.next);
         commit_lib.verifyLeaf(proof.commitment, i, leaf, opening.path) catch return false;
 
-        // P(x) == Q(x) * Z_H(x), with Z_H(x) = x^n - 1.
+        // P(x) == Q(x) * Z_H(x), with Z_H(x) = x^n - 1. With transition
+        // exemptions the quotient is taken against Z_H/E, so the identity
+        // the prover built is P(x)*E(x) == Q(x)*Z_H(x).
         const x = lde_dom.at(i);
         const z_h = x.pow(@intCast(n)).sub(Fp2.one);
         // FRI commits antipodal PAIRS: layer 0's leaf j covers positions
@@ -478,7 +567,8 @@ pub fn verify(
         const half_lde = lde_n / 2;
         const q_value = q.values[0][if (i < half_lde) 0 else 1];
         const p_value = recompose(opening, system, alphas[0..n_composed]);
-        if (!p_value.eql(q_value.mul(z_h))) return false;
+        const e_value = exemptionFactorAt(system, config.log_trace, n, x);
+        if (!p_value.mul(e_value).eql(q_value.mul(z_h))) return false;
     }
 
     // Boundary constraints, at the two fixed rows the prover must open.
@@ -697,6 +787,87 @@ test "stark: config rejects a blowup smaller than the AIR degree" {
     config.log_blowup = 0;
     config.fri.log_domain = config.logLde();
     try testing.expectError(Error.InvalidConfig, config.validate(system));
+}
+
+test "stark: a transition exemption waives exactly the last row" {
+    const a = testing.allocator;
+    const system: System = .{
+        .constraints = &kRunningSumConstraints,
+        .transition_exemptions = 1,
+    };
+    const config = testConfig(4);
+    const trace = try honestTrace(a, 16);
+    defer {
+        for (trace.columns) |col| a.free(col);
+        a.free(trace.columns);
+    }
+
+    // Break the wrap: the last row no longer cancels the running sum, so
+    // the composed constraint at that row is false. The exemption is what
+    // makes this legal — the quotient is taken against Z_H/E, and
+    // P·E vanishes on the whole domain.
+    const bv = try a.dupe(Fp2, trace.columns[1]);
+    defer a.free(bv);
+    bv[15] = g(7);
+    const cols = try a.alloc([]const Fp2, 3);
+    defer a.free(cols);
+    cols[0] = trace.columns[0];
+    cols[1] = bv;
+    cols[2] = trace.columns[2];
+    const bad_last: Trace = .{ .rows = trace.rows, .columns = cols };
+
+    var pt = Transcript.init("zkml.stark.v1");
+    var proof = try prove(a, &pt, bad_last, system, config);
+    defer proof.deinit(a);
+    var vt = Transcript.init("zkml.stark.v1");
+    try testing.expect(try verify(&vt, &proof, system, config));
+
+    // One row earlier is NOT exempt: same edit, prover refuses. The
+    // exemption count is a prefix of the trace's tail, not "wherever the
+    // prover finds it convenient".
+    bv[14] = g(7);
+    var pt2 = Transcript.init("zkml.stark.v1");
+    try testing.expectError(
+        Error.ConstraintViolation,
+        prove(a, &pt2, bad_last, system, config),
+    );
+
+    // And without the exemption the last row is enforced like any other.
+    bv[14] = trace.columns[1][14];
+    var pt3 = Transcript.init("zkml.stark.v1");
+    try testing.expectError(
+        Error.ConstraintViolation,
+        prove(a, &pt3, bad_last, runningSumSystem(), config),
+    );
+}
+
+test "stark: an exemption the FRI residual bound cannot cover is refused" {
+    // One exempt row and degree 2: deg Q <= rows-1, so the standard
+    // log_residual_degree = log_trace still covers it and the GEMM configs
+    // do not have to move.
+    const one: System = .{
+        .constraints = &kRunningSumConstraints,
+        .transition_exemptions = 1,
+    };
+    try testConfig(4).validate(one);
+
+    // Two exempt rows: deg Q <= rows, which no longer fits under
+    // log_residual_degree = log_trace. The bound is a real requirement, not
+    // belt-and-braces: an honest proof here would be rejected by the FRI
+    // residual check as "too high degree".
+    const two: System = .{
+        .constraints = &kRunningSumConstraints,
+        .transition_exemptions = 2,
+    };
+    try testing.expectError(Error.InvalidConfig, testConfig(4).validate(two));
+    // One bit of slack fixes it (log_final has to move with it, or the
+    // residual would sit at rate 1, and the LDE has to hold log_final).
+    var roomy = testConfig(4);
+    roomy.log_blowup = 3;
+    roomy.fri.log_domain = roomy.logLde();
+    roomy.fri.log_residual_degree = 5;
+    roomy.fri.log_final = 6;
+    try roomy.validate(two);
 }
 
 test "stark: config requires the FRI domain to match the LDE" {

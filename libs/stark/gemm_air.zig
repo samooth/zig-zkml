@@ -12,25 +12,25 @@
 //! The trace domain is cyclic, so the composed constraint holds at EVERY
 //! row, including the wrap from the last row to row 0. A real GEMM output
 //! is not zero, so a prefix sum cannot simply wrap. The last row is
-//! therefore a synthetic closing row:
-//!
-//!   a[last] = 1
-//!   b[last] = -(sum of the real MACs)
-//!   s[last] = +(sum of the real MACs)   == the claimed output
-//!
-//! which makes the wrap evaluate to `s[0] = s[last] + 1 * (-C) = 0` — the
-//! cycle closes. Three boundary constraints pin it down, all checked on
-//! authenticated values at fixed rows:
+//! therefore a synthetic closing row, and it is the one row where the
+//! composed constraints are EXEMPT (`System.transition_exemptions = 1`,
+//! Winterfell's default). Two boundary constraints carry the row instead,
+//! both checked on authenticated values at fixed rows:
 //!
 //!   s[0]     = 0
-//!   a[last]  = 1
-//!   b[last]  = -(c[last])
+//!   s[last]  = c[last]      the claimed output
 //!
 //! Together they force `c[last]` to equal the sum of the trace's real
-//! products. A prover claiming a different output must either break the
-//! cycle (rejected by the composed constraint) or change its own a/b
-//! products (rejected by the boundary). Binding a/b to the actual
-//! quantized weights is the dequant/range argument — LogUp, still open.
+//! products: the sum is telescoping over rows 0..last-1, all of which are
+//! enforced, and `s[last]` is what the verifier reads at the last row. A
+//! prover claiming a different output must either break the sum (rejected
+//! on a non-exempt row) or move `s[last]` (rejected by the boundary).
+//!
+//! The exemption is what lets the closing row carry NO operand binding.
+//! The old pins `a[last] = 1`, `b[last] = -c[last]` made the closing row a
+//! dequantized operand of `(1, -C)`, and `-C` is not in the image of
+//! `fp16ToFixedQ4_22` for any C, so a per-row scale-provenance constraint
+//! could never hold there. See quant_binding.zig and the plan's F2 notes.
 //!
 //! Trace layout (one output element per trace; multi-tile needs segment
 //! selectors, tracked in TODO under F2):
@@ -83,18 +83,11 @@ const kRunningSumTerms = [_]Term{
 const kFirstRowTerms = [_]Term{
     .{ .factors = &kFactorsS },
 };
-const kFactorsA = [_]Factor{.{ .column = .{ .index = col_a } }};
-const kCloseA = [_]Term{
-    // a[last] - 1
-    .{ .factors = &kFactorsA },
-    .{ .factors = &[_]Factor{.{ .constant = Fp2.one }}, .coefficient = kNegOne },
-};
-const kFactorsB = [_]Factor{.{ .column = .{ .index = col_b } }};
-const kFactorsC = [_]Factor{.{ .column = .{ .index = col_c } }};
-const kCloseB = [_]Term{
-    // b[last] + c[last]
-    .{ .factors = &kFactorsB },
-    .{ .factors = &kFactorsC },
+const kCloseCFactors = [_]Factor{.{ .column = .{ .index = col_c } }};
+/// s[last] - c[last]: the claim is read straight off the telescoped sum.
+const kCloseOutputTerms = [_]Term{
+    .{ .factors = kFactorsS[0..1] },
+    .{ .factors = kCloseCFactors[0..1], .coefficient = kNegOne },
 };
 
 const kConstraints = [_]Constraint{
@@ -104,13 +97,16 @@ const kConstraints = [_]Constraint{
         .terms = &kRunningSumTerms,
     },
     .{ .name = "s[0] = 0", .scope = .boundary_first, .terms = &kFirstRowTerms },
-    .{ .name = "a[last] = 1", .scope = .boundary_last, .terms = &kCloseA },
-    .{ .name = "b[last] = -c[last]", .scope = .boundary_last, .terms = &kCloseB },
+    .{ .name = "s[last] = c[last]", .scope = .boundary_last, .terms = &kCloseOutputTerms },
 };
 
-/// The GEMM AIR: composed running sum + the three closing constraints.
-pub fn system() System {
-    return .{ .constraints = &kConstraints };
+pub fn system(k: usize) BuildError!System {
+    const rows = try rowsFor(k);
+    return .{
+        .constraints = &kConstraints,
+        .trace_rows = rows,
+        .transition_exemptions = 1,
+    };
 }
 
 /// Real MAC rows: one per MAC.
@@ -118,12 +114,13 @@ pub fn realRowsFor(k: usize) usize {
     return k;
 }
 
-/// Total trace rows: the MAC rows, the synthetic closing row, and enough
-/// zero-padding to reach a power of two (the FRI domain size). Padding rows
-/// carry a = b = 0, so they leave the running sum untouched.
-pub fn rowsFor(k: usize) usize {
-    const needed = k + 1;
-    return std.math.ceilPowerOfTwo(usize, needed) catch needed;
+/// Total trace rows: one row per MAC and the synthetic closing row. The
+/// domain must be a power of two, so only k = 2^m - 1 is representable.
+pub fn rowsFor(k: usize) BuildError!usize {
+    if (k == 0) return BuildError.EmptyReduction;
+    const rows = k + 1;
+    if (!std.math.isPowerOfTwo(rows)) return BuildError.UnsupportedTraceSize;
+    return rows;
 }
 
 pub const Trace = struct {
@@ -145,6 +142,8 @@ pub const BuildError = error{
     ShortOperands,
     /// the operands do not actually multiply to the claimed output.
     OutputMismatch,
+    /// k + 1 is not a power of two, so padding would be required.
+    UnsupportedTraceSize,
 };
 
 /// Build an honest trace for the output element `sum(a[i] * b[i])`.
@@ -161,9 +160,8 @@ pub fn buildTrace(
     claimed_output: Goldilocks,
 ) BuildError!Trace {
     if (a.len == 0 or a.len != b.len) return BuildError.EmptyReduction;
-    const rows = rowsFor(a.len);
+    const rows = try rowsFor(a.len);
     const real_rows = realRowsFor(a.len);
-    if (real_rows + 1 > rows) return BuildError.EmptyReduction;
 
     const cols = try allocator.alloc([]Fp2, column_count);
     errdefer allocator.free(cols);
@@ -185,20 +183,12 @@ pub fn buildTrace(
         total = total.add(a[row].mul(b[row]));
     }
 
-    // Padding rows between the real ones and the closing row: a = b = 0,
-    // so the running sum holds still.
-    var pad: usize = real_rows;
-    while (pad < rows - 1) : (pad += 1) {
-        av[pad] = Fp2.zero;
-        bv[pad] = Fp2.zero;
-        sv[pad] = Fp2.re(total);
-        cv[pad] = Fp2.zero;
-    }
-
-    // Closing row (the last): pins the cycle to the claimed output.
+    // Closing row (the last): exempt from the composed constraint, so its a
+    // and b are free and the binder needs no scale there. What matters is
+    // that s[last] is the telescoped sum and c[last] states it.
     const last = rows - 1;
-    av[last] = Fp2.one;
-    bv[last] = Fp2.re(Goldilocks.zero.sub(claimed_output));
+    av[last] = Fp2.zero;
+    bv[last] = Fp2.zero;
     sv[last] = Fp2.re(total);
     cv[last] = Fp2.re(claimed_output);
 

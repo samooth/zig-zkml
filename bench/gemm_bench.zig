@@ -7,27 +7,19 @@
 //!   zig build bench
 //!   zig build bench -- --k 1024 --repeat 3
 //!
-//! Both layouts prove the SAME reduction with the SAME operand binding
-//! (raw nibble + block scale, see quant_binding.zig), so the difference
-//! measured is the layout and nothing else:
+//! Both layouts use the same operand binding (raw nibble + block scale), but
+//! the exact no-padding shape is different: 1 MAC/row accepts k = 2^m - 1,
+//! while 16 MACs/row accepts k = 16·(2^m - 1). Those sets are disjoint, so
+//! the bench reports the nearest valid shape for each layout and prints both k
+//! values instead of claiming a same-reduction comparison:
 //!
 //!   1 MAC/row    gemm_air    + quant_binding   (4 + 16 columns)
 //!   16 MACs/row  gemm_chunk  + chunk_binding   (34 + 226 columns)
 //!
-//! ## What the measurements say (don't trust the intuition)
-//!
-//! Chunking cuts the TRACE 16x (rows: 32768 -> 2048 at k=16384) but it
-//! also multiplies the COLUMNS by 14, and columns dominate: the chunked
-//! prover is 1.3-2x SLOWER, not 16x faster. It still wins on two axes at
-//! scale — the proof gets smaller (0.19x at k=16384, because per-MAC
-//! openings and Merkle paths grow with the row count) and verification
-//! stops growing with it (7.4 ms vs 18.7 ms).
-//!
-//! So the lever is not the row count, it is the 192 binding columns: 12
-//! per operand (nibble, 4 bits, scale, x2). A LogUp membership check
-//! against a 16-entry nibble table would replace 5 columns with 1 and is
-//! the obvious next optimization — measured, not guessed, before anyone
-//! spends the effort.
+//! Chunking cuts the TRACE 16x, but it also multiplies the COLUMNS by 14, and
+//! columns dominate. The lever is therefore not the row count, it is the
+//! 192 binding columns: 12 per operand. A LogUp membership check against a
+//! 16-entry nibble table would replace 5 columns with 1.
 
 const std = @import("std");
 const zkml = @import("zkml");
@@ -126,8 +118,8 @@ const Data = struct {
     b: []Goldilocks,
     nib_a: []u8,
     nib_b: []u8,
-    scale_a: []Goldilocks,
-    scale_b: []Goldilocks,
+    scale_a: []u16,
+    scale_b: []u16,
     c: Goldilocks,
 
     fn deinit(self: *Data, allocator: std.mem.Allocator) void {
@@ -149,8 +141,8 @@ fn buildData(allocator: std.mem.Allocator, k: usize) !Data {
         .b = try allocator.alloc(Goldilocks, k),
         .nib_a = try allocator.alloc(u8, k),
         .nib_b = try allocator.alloc(u8, k),
-        .scale_a = try allocator.alloc(Goldilocks, k),
-        .scale_b = try allocator.alloc(Goldilocks, k),
+        .scale_a = try allocator.alloc(u16, k),
+        .scale_b = try allocator.alloc(u16, k),
         .c = Goldilocks.zero,
     };
     errdefer d.deinit(allocator);
@@ -163,7 +155,7 @@ fn buildData(allocator: std.mem.Allocator, k: usize) !Data {
         d.b[i] = deq_b[i % 256];
         d.nib_a[i] = rawNibble(i % 256);
         d.nib_b[i] = rawNibble(i % 256);
-        d.scale_a[i] = Goldilocks.fromU64(tensor.fp16ToFixedQ4_22(blockScale(i)) catch unreachable);
+        d.scale_a[i] = blockScale(i);
         d.scale_b[i] = d.scale_a[i];
         acc = acc.add(d.a[i].mul(d.b[i]));
     }
@@ -172,7 +164,7 @@ fn buildData(allocator: std.mem.Allocator, k: usize) !Data {
 }
 
 fn benchPerMac(allocator: std.mem.Allocator, io: std.Io, data: *const Data) !Stats {
-    var sys = try quant.buildSystem(allocator);
+    var sys = try quant.buildSystem(allocator, data.a.len);
     defer sys.deinit();
     const system = sys.system();
 
@@ -216,7 +208,7 @@ fn benchPerMac(allocator: std.mem.Allocator, io: std.Io, data: *const Data) !Sta
 }
 
 fn benchChunked(allocator: std.mem.Allocator, io: std.Io, data: *const Data) !Stats {
-    var sys = try cbind.buildSystem(allocator);
+    var sys = try cbind.buildSystem(allocator, data.a.len);
     defer sys.deinit();
     const system = sys.system();
 
@@ -267,17 +259,48 @@ fn kib(bytes: usize) f64 {
     return @as(f64, @floatFromInt(bytes)) / 1024.0;
 }
 
-fn run(allocator: std.mem.Allocator, io: std.Io, k: usize, repeat: usize) !void {
-    std.debug.print("\n=== F2 GEMM bench (ReleaseFast) ===\n", .{});
-    std.debug.print("k = {d} MACs per output element, best of {d}\n\n", .{ k, repeat });
+fn largestPowerOfTwoAtMost(n: usize) usize {
+    return @as(usize, 1) << @intCast(std.math.log2_int(usize, n));
+}
 
-    var data = try buildData(allocator, k);
-    defer data.deinit(allocator);
-    std.debug.print("true output C = {d} (nonzero: {})\n\n", .{ data.c.toU64(), !data.c.isZero() });
+fn perMacK(requested: usize) !usize {
+    if (requested == 0) return error.BadK;
+    const p = largestPowerOfTwoAtMost(requested + 1);
+    if (p < 2) return error.BadK;
+    return p - 1;
+}
+
+fn chunkedK(requested: usize) !usize {
+    if (requested < gemm_chunk.slots) return error.BadK;
+    const max_chunks = requested / gemm_chunk.slots;
+    const p = largestPowerOfTwoAtMost(max_chunks + 1);
+    if (p < 2) return error.BadK;
+    return (p - 1) * gemm_chunk.slots;
+}
+
+fn run(allocator: std.mem.Allocator, io: std.Io, requested: usize, repeat: usize) !void {
+    const per_mac_k = try perMacK(requested);
+    const chunked_k = try chunkedK(requested);
+    std.debug.print("\n=== F2 GEMM bench (ReleaseFast) ===\n", .{});
+    std.debug.print("requested k = {d}; valid shapes: per-mac {d}, chunked {d}; best of {d}\n\n", .{
+        requested,
+        per_mac_k,
+        chunked_k,
+        repeat,
+    });
+
+    var per_data = try buildData(allocator, per_mac_k);
+    defer per_data.deinit(allocator);
+    var chunk_data = try buildData(allocator, chunked_k);
+    defer chunk_data.deinit(allocator);
+    std.debug.print("outputs: per-mac C = {d}, chunked C = {d}\n\n", .{
+        per_data.c.toU64(),
+        chunk_data.c.toU64(),
+    });
 
     var per_mac = Stats{
         .label = "1 MAC/row",
-        .k = k,
+        .k = per_mac_k,
         .rows = 0,
         .columns = 0,
         .composed = 0,
@@ -288,10 +311,11 @@ fn run(allocator: std.mem.Allocator, io: std.Io, k: usize, repeat: usize) !void 
     };
     var chunked = per_mac;
     chunked.label = "16 MACs/row";
+    chunked.k = chunked_k;
 
     for (0..repeat) |i| {
-        const a = try benchPerMac(allocator, io, &data);
-        const c = try benchChunked(allocator, io, &data);
+        const a = try benchPerMac(allocator, io, &per_data);
+        const c = try benchChunked(allocator, io, &chunk_data);
         per_mac.prove_ns = @min(per_mac.prove_ns, a.prove_ns);
         per_mac.verify_ns = @min(per_mac.verify_ns, a.verify_ns);
         per_mac.proof_bytes = a.proof_bytes;
@@ -313,12 +337,12 @@ fn run(allocator: std.mem.Allocator, io: std.Io, k: usize, repeat: usize) !void 
         });
     }
 
-    std.debug.print("\n{s: <14} {s: >7} {s: >8} {s: >9} {s: >10} {s: >10} {s: >9} {s: >5}\n", .{
-        "layout", "rows", "columns", "composed", "prove ms", "verify ms", "proof KiB", "ok",
+    std.debug.print("\n{s: <14} {s: >7} {s: >8} {s: >9} {s: >10} {s: >10} {s: >10} {s: >9} {s: >5}\n", .{
+        "layout", "k", "rows", "columns", "composed", "prove ms", "verify ms", "proof KiB", "ok",
     });
     for ([_]Stats{ per_mac, chunked }) |s| {
-        std.debug.print("{s: <14} {d: >7} {d: >8} {d: >9} {d: >10.2} {d: >10.2} {d: >9.1} {s: >5}\n", .{
-            s.label, s.rows, s.columns, s.composed, ms(s.prove_ns), ms(s.verify_ns), kib(s.proof_bytes), if (s.verified) "yes" else "NO",
+        std.debug.print("{s: <14} {d: >7} {d: >8} {d: >9} {d: >10} {d: >10.2} {d: >10.2} {d: >9.1} {s: >5}\n", .{
+            s.label, s.k, s.rows, s.columns, s.composed, ms(s.prove_ns), ms(s.verify_ns), kib(s.proof_bytes), if (s.verified) "yes" else "NO",
         });
     }
 
@@ -329,12 +353,11 @@ fn run(allocator: std.mem.Allocator, io: std.Io, k: usize, repeat: usize) !void 
         ratio(chunked.rows, per_mac.rows),
     });
 
-    // Per-MAC cost per attested MAC, which is the number that matters for
-    // a whole layer: a k=2048 expert reduction is 2048 MACs.
-    const macs: f64 = @floatFromInt(k);
+    const per_macs: f64 = @floatFromInt(per_mac.k);
+    const chunked_macs: f64 = @floatFromInt(chunked.k);
     std.debug.print("per MAC: per-mac layout {d:.3} us prove, chunked {d:.3} us prove\n", .{
-        ms(per_mac.prove_ns) * 1000.0 / macs,
-        ms(chunked.prove_ns) * 1000.0 / macs,
+        ms(per_mac.prove_ns) * 1000.0 / per_macs,
+        ms(chunked.prove_ns) * 1000.0 / chunked_macs,
     });
 }
 

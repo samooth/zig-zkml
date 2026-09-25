@@ -70,7 +70,7 @@ es solo (a) doc/comments `kt_*`, (b) tipos con forma MoE (`SlotKey{layer,op,expe
 | `include/zkml_c.h` | Reordenar docs; **las 9 firmas `zkml_*` sin cambios** (ABI v1) |
 | `libs/merkle.zig`, `libs/attestation.zig`, `libs/trace/root.zig`, `zkml.zig` | Quitar referencias doc a kt |
 | **NUEVO `include/zkml_engine.h`** | Contrato del adapter: callbacks `zkml_weight_stream`, hooks de witness (`zkml_witness_begin_layer/record_op/end_layer`), secuencias de ciclo de vida (load→attest, forward→record, prove→verify), checklist por stage (F0 attestation-only vs F2 full proof) |
-| `BLUE_PRINT.md` §8, `TODO.md` | Reemplazar sección glue `kt_*` por **matriz de adapters por motor** |
+| `BLUE_PRINT.md` §8 y §11 | Reemplazar sección glue `kt_*` por **matriz de adapters por motor** |
 | `build.zig` | Añadir `adapters` al gate `fmt` |
 
 **Gate:** `zig build test --summary all` (67/67), `zig build abi` intacto, `zig build fmt`.
@@ -230,7 +230,7 @@ build test` (81/81), `abi`, `fmt` y `llama-adapter` siguen verdes.
 ### Stage 4 — ktransformers-zig reference adapter — ✅ DONE
 
 **Layout:** `adapters/ktransformers/` — el glue `kt_*` → `zkml_*` que
-`TODO.md`/`zkML.md` ya esbozaban, pero llama al contrato genérico
+`zkML.md` ya esbozaba, pero llama al contrato genérico
 (`zkml_engine.h`) como todos los demás.
 
 **Implementado:** `libkt_zkml_glue.so` compilado contra el `kt_kernel.h` del
@@ -344,7 +344,7 @@ kt último como referencia).
 
 - El backend STARK F2 (composición de constraints, operand binding,
   chunking 16 MACs, AIR de routing, núcleo LogUp y el AIR float bit-exacto)
-  — vive en `TODO.md`, donde además está el ROADMAP reorderado. Este plan
+  — vive en `BLUE_PRINT.md` §11, con el ROADMAP ya reorderado. Este plan
   solo **conecta motores al core ya genérico**.
 - Editar repos upstream (llama.cpp, vllm, zig-ai, ktransformers-zig) — todos los
   cambios caen en zig-zkml.

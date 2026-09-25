@@ -14,7 +14,7 @@ const testing = std.testing;
 const Goldilocks = tensor.Goldilocks;
 const Fp2 = stark.Fp2;
 
-const k_macs: usize = 256;
+const k_macs: usize = 496;
 
 const CONFIG: stark.Config = blk: {
     const log_trace: u6 = 5;
@@ -51,8 +51,8 @@ const Case = struct {
     b: []Goldilocks,
     nib_a: []u8,
     nib_b: []u8,
-    scale_a: []Goldilocks,
-    scale_b: []Goldilocks,
+    scale_a: []u16,
+    scale_b: []u16,
     c_true: Goldilocks,
 
     fn deinit(self: *Case, allocator: std.mem.Allocator) void {
@@ -72,8 +72,8 @@ fn realCase(allocator: std.mem.Allocator) !Case {
     const block = blockWithRamp();
     const deq_a = tensor.dequantQ4K(&block, 0x3C00) catch unreachable; // fp16 1.0
     const deq_b = tensor.dequantQ4K(&block, 0x3800) catch unreachable; // fp16 0.5
-    const s_a = Goldilocks.fromU64(tensor.fp16ToFixedQ4_22(0x3C00) catch unreachable);
-    const s_b = Goldilocks.fromU64(tensor.fp16ToFixedQ4_22(0x3800) catch unreachable);
+    const s_a: u16 = 0x3C00; // fp16 1.0
+    const s_b: u16 = 0x3800; // fp16 0.5
 
     const a = try allocator.alloc(Goldilocks, k_macs);
     errdefer allocator.free(a);
@@ -83,15 +83,15 @@ fn realCase(allocator: std.mem.Allocator) !Case {
     errdefer allocator.free(nib_a);
     const nib_b = try allocator.alloc(u8, k_macs);
     errdefer allocator.free(nib_b);
-    const scale_a = try allocator.alloc(Goldilocks, k_macs);
+    const scale_a = try allocator.alloc(u16, k_macs);
     errdefer allocator.free(scale_a);
-    const scale_b = try allocator.alloc(Goldilocks, k_macs);
+    const scale_b = try allocator.alloc(u16, k_macs);
     errdefer allocator.free(scale_b);
 
     var acc = Goldilocks.zero;
     for (0..k_macs) |i| {
-        a[i] = deq_a[i];
-        b[i] = deq_b[i];
+        a[i] = deq_a[i % 256];
+        b[i] = deq_b[i % 256];
         nib_a[i] = rawNibble(i);
         nib_b[i] = rawNibble(i);
         scale_a[i] = s_a;
@@ -125,8 +125,9 @@ fn boundTrace(allocator: std.mem.Allocator, case: *const Case) !struct { gemm: c
 
 test "chunk_binding: a real Q4_K reduction proves and verifies in 32 rows" {
     const a = testing.allocator;
-    var sys = try cb.buildSystem(a);
+    var sys = try cb.buildSystem(a, k_macs);
     defer sys.deinit();
+    try testing.expectEqual(@as(?usize, 32), sys.system().trace_rows);
 
     var case = try realCase(a);
     defer case.deinit(a);
@@ -151,8 +152,9 @@ test "chunk_binding: a real Q4_K reduction proves and verifies in 32 rows" {
 
 test "chunk_binding: a tampered chunk operand is rejected" {
     const a = testing.allocator;
-    var sys = try cb.buildSystem(a);
+    var sys = try cb.buildSystem(a, k_macs);
     defer sys.deinit();
+    try testing.expectEqual(@as(?usize, 32), sys.system().trace_rows);
 
     var case = try realCase(a);
     defer case.deinit(a);
@@ -178,8 +180,9 @@ test "chunk_binding: a tampered chunk operand is rejected" {
 
 test "chunk_binding: a non-boolean bit deep in a chunk is rejected" {
     const a = testing.allocator;
-    var sys = try cb.buildSystem(a);
+    var sys = try cb.buildSystem(a, k_macs);
     defer sys.deinit();
+    try testing.expectEqual(@as(?usize, 32), sys.system().trace_rows);
 
     var case = try realCase(a);
     defer case.deinit(a);
@@ -215,9 +218,9 @@ test "chunk_binding: operands inconsistent with their scale are refused up front
     var gemm = try chunk.buildTrace(a, case.a, case.b, case.c_true);
     defer gemm.deinit(a);
 
-    const wrong = try a.alloc(Goldilocks, k_macs);
+    const wrong = try a.alloc(u16, k_macs);
     defer a.free(wrong);
-    for (0..k_macs) |i| wrong[i] = case.scale_a[i].add(Goldilocks.one);
+    for (0..k_macs) |i| wrong[i] = 0x3C01; // a real fp16, but not this scale
 
     try testing.expectError(
         cb.BindError.InconsistentOperands,
@@ -242,4 +245,61 @@ test "chunk_binding: a raw nibble of 16 is refused" {
         cb.BindError.NibbleOutOfRange,
         cb.bindOperands(a, &gemm, bad, case.scale_a, case.nib_b, case.scale_b),
     );
+}
+
+test "chunk_binding: padded traces and invalid system shapes are refused" {
+    const a = testing.allocator;
+    var case = try realCase(a);
+    defer case.deinit(a);
+    var gemm = try chunk.buildTrace(a, case.a, case.b, case.c_true);
+    defer gemm.deinit(a);
+    gemm.rows = 64;
+
+    try testing.expectError(
+        cb.BindError.PaddedTrace,
+        cb.bindOperands(a, &gemm, case.nib_a, case.scale_a, case.nib_b, case.scale_b),
+    );
+    try testing.expectError(cb.BuildError.InvalidReductionLength, cb.buildSystem(a, 250));
+}
+
+test "chunk_binding: a scale's provenance is checked per slot, not just once" {
+    const a = testing.allocator;
+    var case = try realCase(a);
+    defer case.deinit(a);
+    var gemm = try chunk.buildTrace(a, case.a, case.b, case.c_true);
+    defer gemm.deinit(a);
+
+    // An fp16 that is not a usable q4.22 scale is refused for every slot,
+    // including deep inside the chunk: the gadget runs on all 32 operands
+    // per row, not on a representative one.
+    var bad: []u16 = try a.alloc(u16, k_macs);
+    defer a.free(bad);
+    for (0..k_macs) |i| bad[i] = 0x7C00; // fp16 +inf
+    try testing.expectError(
+        cb.BindError.BadScale,
+        cb.bindOperands(a, &gemm, case.nib_a, bad, case.nib_b, case.scale_b),
+    );
+
+    // A subnormal fp16 is equally unusable, and so is one below the
+    // representable q4.22 range.
+    for (0..k_macs) |i| bad[i] = 0x0001;
+    try testing.expectError(
+        cb.BindError.BadScale,
+        cb.bindOperands(a, &gemm, case.nib_a, bad, case.nib_b, case.scale_b),
+    );
+    for (0..k_macs) |i| bad[i] = 0x0A00; // 2^-13, below 2^-12
+    try testing.expectError(
+        cb.BindError.BadScale,
+        cb.bindOperands(a, &gemm, case.nib_a, bad, case.nib_b, case.scale_b),
+    );
+    for (0..k_macs) |i| bad[i] = 0x4C00; // 16.0, at or above 2^4
+    try testing.expectError(
+        cb.BindError.BadScale,
+        cb.bindOperands(a, &gemm, case.nib_a, bad, case.nib_b, case.scale_b),
+    );
+
+    // And the honest patterns still bind, so none of the above is a blanket
+    // rejection.
+    var ok = try cb.bindOperands(a, &gemm, case.nib_a, case.scale_a, case.nib_b, case.scale_b);
+    defer ok.deinit(a);
 }

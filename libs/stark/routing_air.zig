@@ -209,7 +209,8 @@ pub fn buildSystem(allocator: std.mem.Allocator, rows: usize, k: u64) BuildError
         specs[2 * r + 1] = .{ .column = col_dshift, .bit_base = col_d_bits, .width = score_bits + 1 };
     }
 
-    var inner = range.BuiltSystem.init(allocator, .{ .constraints = &base }, specs) catch |e| switch (e) {
+    const base_system = System{ .constraints = &base, .trace_rows = rows };
+    var inner = range.BuiltSystem.init(allocator, base_system, specs) catch |e| switch (e) {
         error.OutOfMemory => return BuildError.OutOfMemory,
         error.BadWidth => return BuildError.BadWidth,
     };
@@ -235,7 +236,7 @@ pub fn buildSystem(allocator: std.mem.Allocator, rows: usize, k: u64) BuildError
     }
     allocator.free(inner.constraints);
     inner.constraints = grown;
-    inner.system = .{ .constraints = grown };
+    inner.system = inner.system.replaceConstraints(grown);
 
     return .{ .inner = inner, .acc_terms = acc_terms, .acc_factors = acc_factors };
 }
