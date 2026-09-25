@@ -212,9 +212,9 @@ Notas:
   (Q4_0) pero no Q4_K. El plan es una **capa por formato**, ordenada
   Q4_0/Q8_0 → Q4_1 → Q4_K → MXFP4/8 (ROADMAP S4 en §11); el
   esquema `int4_gguf_q4_k` del enum NO cambia mientras tanto.
-- **Float formats need no dequant constraints at all**: bf16→fp32 and
-  fp8→fp32 are exact widenings, so for those tensors the entire cost is
-  the float AIR, not the weights.
+- **Los formatos float no necesitan constraints de dequant**: bf16→fp32 y
+  fp8→fp32 son ensanchamientos exactos, así que para esos tensores el coste
+  entero es el AIR float, no los pesos.
 - MXFP8 (que faltaba en el enum de zkML.md): scale UE8M0 por grupo de 32 es
   potencia de 2 → lookup pow2 directo, el esquema más barato de reencuadre.
 - **Estabilidad del enum `Scheme`**: los ordinales se serializan en el

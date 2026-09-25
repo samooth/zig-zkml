@@ -993,3 +993,67 @@ test "quant: no malformed fp16 can reach a provable witness" {
     var vt = stark.Transcript.init("zkml.quant.q4_0.v1");
     try testing.expect(try stark.verify(&vt, &proof, sys.system(), CONFIG));
 }
+
+test "quant: tampering with a scale's provenance witness is rejected" {
+    const a = testing.allocator;
+    var sys = try Q4_0.buildSystem(a, k_macs);
+    defer sys.deinit();
+    var case = try symmetricCase(a, Q4_0.width);
+    defer case.deinit(a);
+
+    var bt = try boundTrace(Q4_0, a, &case);
+    defer bt.gemm.deinit(a);
+    defer bt.bound.deinit(a);
+
+    // The honest trace proves and verifies, so the negatives below are not
+    // passing because everything is rejected.
+    var pt = stark.Transcript.init("zkml.quant.q4_0.v1");
+    var proof = try stark.prove(a, &pt, .{
+        .rows = bt.bound.rows,
+        .columns = bt.bound.columns,
+    }, sys.system(), CONFIG);
+    defer proof.deinit(a);
+    var vt = stark.Transcript.init("zkml.quant.q4_0.v1");
+    try testing.expect(try stark.verify(&vt, &proof, sys.system(), CONFIG));
+
+    // Claim a different shift. The scale column no longer matches the
+    // (1024 + m)·2^s that the selector and the mantissa produce: this is
+    // the attack the gadget exists to stop, and it is caught by the AIR
+    // rather than by the binder refusing to build the trace.
+    const bad = try a.dupe(Fp2, bt.bound.columns[Q4_0.col_scale_a]);
+    defer a.free(bad);
+    bad[0] = bad[0].add(Fp2.one);
+    const cols = try a.alloc([]const Fp2, Q4_0.column_count);
+    defer a.free(cols);
+    for (bt.bound.columns, 0..) |c, i| cols[i] = c;
+    cols[Q4_0.col_scale_a] = bad;
+
+    var pt2 = stark.Transcript.init("zkml.quant.q4_0.v1");
+    try testing.expectError(
+        stark.Error.ConstraintViolation,
+        stark.prove(a, &pt2, .{
+            .rows = bt.bound.rows,
+            .columns = cols,
+        }, sys.system(), CONFIG),
+    );
+
+    // And a non-boolean selector bit is refused too: with two bits set, M
+    // would no longer be a power of two even if the sum constraint were
+    // dropped.
+    const sel_bad = try a.dupe(Fp2, bt.bound.columns[Q4_0.gadget_a.sel_base]);
+    defer a.free(sel_bad);
+    sel_bad[0] = Fp2.re(Goldilocks.fromU64(3));
+    const cols2 = try a.alloc([]const Fp2, Q4_0.column_count);
+    defer a.free(cols2);
+    for (bt.bound.columns, 0..) |c, i| cols2[i] = c;
+    cols2[Q4_0.gadget_a.sel_base] = sel_bad;
+
+    var pt3 = stark.Transcript.init("zkml.quant.q4_0.v1");
+    try testing.expectError(
+        stark.Error.ConstraintViolation,
+        stark.prove(a, &pt3, .{
+            .rows = bt.bound.rows,
+            .columns = cols2,
+        }, sys.system(), CONFIG),
+    );
+}

@@ -18,7 +18,7 @@ engine's native kernels as the witness generator.
 |---|---|
 | **Landed** | 4 engine adapters (Stages 0–4) · weights attestation + independent Python auditor · witness ABI v2 · STARK backend (FRI, column commitments, quotient) · GEMM AIR with operand binding, fp16 scale provenance and 16-MAC chunking · bit-exact float multiply for 4 formats |
 | **Next** | real-engine witness → per-format weight layer → fingerprint/sumcheck |
-| **Gates** | `zig build verify` — 227 tests (216 core + 15 vLLM), C ABI, independent Python audit |
+| **Gates** | `zig build verify` — 228 tests (217 core + 15 vLLM), C ABI, independent Python audit |
 
 The plan was **reordered by what was measured** — the sumcheck prover became
 the critical path, and the weight layer and the witness source became F2/F3
@@ -192,8 +192,8 @@ accumulation.
 
 Every negative is a gate: tampered trace, opening, quotient and root are
 rejected, a random trace is refused, every rounding witness of every format is
-flipped and rejected, and ~1465 reference pairs per format are swept with
-every constraint evaluated.
+flipped and rejected, and **3249 reference pairs per format** are swept against
+the reference with every constraint evaluated.
 
 ## Cost, measured
 

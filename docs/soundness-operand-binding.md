@@ -310,6 +310,21 @@ modelo — y rechaza un chunk cuyas escalas no sean constantes, en vez de
 promediarlo en silencio y atestiguar la escala equivocada para los slots que
 discrepan.
 
+**Y el gadget se puede apagar por formato, y para Q8_0 lo está.**
+`SymmetricBinding(width, provenance)` es una plantilla comptime, así que la
+procedencia es un parámetro, no un caso especial. `Q4_0` (ancho 4) la lleva:
+su escala *sí* es un fp16 en q4.22. `Q8_0` (ancho 8) no, y no la lleva — su
+escala no es un fp16 en q4.22 y la capa tensor todavía no tiene dequantizador
+para Q8_0, así que aplicar el gadget atestiguaría una convención que Q8_0 no
+usa. Sería peor no probarlo: `Q8_0` prueba la representación y no el origen
+de la escala, y el hueco está en un test para que no se olvide.
+
+Esto también es un aviso sobre el refactor de formatos: nació de un commit
+anterior a `trace_rows` y a las exenciones, y su `buildSystem` llamaba a
+`gemm_air.system()` sin `k` y reconstruía el System desde cero. Aceptar su
+código tal cual habría reabierto los dos huecos que este documento describe.
+Ver §3.6.
+
 **Medido, mismo bench (`--k 256 --repeat 1`):**
 
 | layout | columnas | composed | prove | verify | proof |
@@ -326,11 +341,39 @@ fila porque **ahí sí** cada fila es un MAC distinto y puede caer en un bloque
 distinto, así que no hay nada que compartir. Bajarlo requeriría cambiar ese
 layout, no el binding.
 
+### 3.6 Un rebase puede reabrir un hueco cerrado
+
+El binding simétrico se generalizó a una plantilla por formato en un commit
+nacido de una base **anterior** a `trace_rows` y a las transition exemptions.
+Su `buildSystem` llamaba a `gemm_air.system()` sin `k` y reconstruía el System
+como `.{ .constraints = grown }`. Resolver el conflicto tomando su lado
+funcionaba —compilaba, y sus propios tests pasaban— y devolvía el repo al
+estado anterior a este documento: la longitud del trace dejaba de ser parte de
+la statement y la fila de cierre volvía a llevar un operando atado.
+
+Dos reglas que salen de ahí:
+
+- **`gemm_air.system(k)` no es opcional.** El `k` es lo que fija la forma, y
+  `replaceConstraints` es lo que arrastra `trace_rows` y
+  `transition_exemptions` al System fusionado. Reconstruir el System a mano los
+  pierde en silencio.
+- **Un conflicto "mecánico" puede ser semántico.** Los tres ficheros en
+  conflicto lo parecían: mismo tipo de cambio, misma región del fichero. Dos
+  de ellos habían reescrito exactamente las mismas líneas por motivos
+  distintos, y la elección no era "qué lado gana" sino "qué dos cosas
+  sobreviven".
+
+Y un bug que sólo apareció al resolverlo: `gadgetCfg` recibía un offset y
+nunca le sumaba `gadget_base`, así que las columnas del gadget se solapaban
+con las de quant y bits. El sistema compilaba, las constraints se evaluaban
+—contra las columnas equivocadas— y todos los tests de honestidad pasaban.
+Un gadget que lee las columnas de otro no atestigua nada, y falla en silencio.
+
 ---
 
 ## 4. Trampas de implementación
 
-Tres que costaron tiempo y conviene no volver a pisar:
+Cuatro que costaron tiempo y conviene no volver a pisar:
 
 **Un puntero colgante silencioso.** `air_builder.freeze` devuelve un `Owned`
 cuyos `Term`/`Factor` son los que los `Constraint` apuntan. Copiar los
@@ -346,6 +389,14 @@ es el valor *nuevo*. El síntoma es `ConstraintViolation` en un prover que está
 mintiendo con descaro: el polinomio multiplicado no es divisible por `Z_H`.
 Guardar el original en una variable antes de sobrescribir.
 
+**Un gadget puede leer las columnas de otro.** `gadgetCfg` calculaba su layout
+a partir de un offset sin sumarle la base, con lo que sus columnas caían
+encima de las de quant y bits. Compilaba, las constraints se evaluaban y los
+tests de honestidad pasaban: el gadget estaba atestiguando las columnas
+equivocadas. Un `maxColumn()` que devuelve el valor esperado no demuestra que
+el layout sea el que se cree; hace falta un test que fije las columnas
+concretas, no solo su número.
+
 **Un flag no es un boundary.** Al escribir los tests de la exención, el primer
 intento fue comprobar que `b[last]` distinto de `1` se rechaza. Ya no aplica:
 la fila es exenta y *cualquier* valor verifica. Lo que no es libre es el claim,
@@ -358,7 +409,7 @@ y eso lo atrapa `s[last] = c[last]`. Los tests de
 
 ```sh
 zig build fmt
-zig build test --summary all        # 213 tests
+zig build test --summary all        # 228 tests
 zig build verify --summary all      # 14/14 pasos, ABI + Python
 zig build -Doptimize=ReleaseFast test --summary all
 zig build spike                     # auditoría FRI 3/3
