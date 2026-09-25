@@ -285,14 +285,23 @@ subnormales, demasiado pequeños, demasiado grandes, inf y NaN.
 | 1 MAC/fila (k=255) | 16 → **74** | 13 → **55** | 10.8 → **74.0 ms** | 0.37 → **1.34 ms** | 12.0 → **28.3 KiB** |
 | 16 MACs/fila (k=240) | 226 → **1346** | 193 → **865** | 16.6 → **356.4 ms** | 3.20 → **15.7 ms** | 66.1 → **381.1 KiB** |
 
-El layout chunked paga 32 gadgets por fila, uno por slot. Es el precio de no
-poder asumir que los 16 operandos de un chunk comparten escala: un chunk puede
-cruzar un límite de bloque Q4_K (256 elementos = 16 chunks).
+El layout chunked paga 32 gadgets por fila, uno por slot, y eso se puede
+reducir 16× — a dos gadgets por fila, uno por operand family — porque **un
+chunk de 16 nunca cruza un límite de bloque**.
 
-**Decisión pendiente**: si los pesos reales nunca hacen que un chunk cruce un
-límite de bloque, un gadget por chunk en lugar de por slot lo reduciría 16×. No
-se ha asumido porque es una afirmación sobre los pesos, no sobre el código, y
-hay que comprobarla contra ellos.
+El motivo es aritmético, no una asunción sobre los pesos. Un chunk cubre los
+MACs `[16r, 16r+16)` y un bloque de `B` elementos cubre `[Bj, Bj+B)`. El chunk
+cruza un límite sólo si algún `Bj` cae estrictamente dentro del intervalo, y
+como `B` es múltiplo de 16, todos los `Bj` lo son también. Se comprobó para
+`B ∈ {32, 64, 128, 256}` (el bloque Q4_K real y los sub-bloques de GGML): cero
+cruces en todos los casos. La consecuencia es que los 16 operandos de un chunk
+comparten bloque, y por tanto escala.
+
+**Pendiente, y no es de coste sino de alcance**: un gadget por chunk exige que
+el prover no pueda dar escalas distintas a los 16 slots de una fila, y eso hay
+que expresarlo en el sistema (una restricción de igualdad entre slots) o en el
+binder. No se ha hecho porque cambia la superficie del AIR, y el ahorro —16× en
+columnas del layout chunked— sólo se materializa al hacerlo bien.
 
 ---
 
