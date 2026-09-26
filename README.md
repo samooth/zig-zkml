@@ -158,7 +158,7 @@ re-derives the root from the manifest and verifies the proof bytes.
 | **Witness ABI v2** | `zkml_witness_*` session / record / finalize | done (`ZKML_ABI_VERSION = 2`) | determinism test green |
 | **F2** | STARK backend + GEMM AIR | backend done, see [below](#f2-stark-backend) | backend negatives green |
 | **F3** | `zkml_prove_layer` / `zkml_verify_layer` for one layer | pending | proof < 1 MB, verify < 100 ms, ±1 ulp rejected |
-| **F4** | Multi-block recursion over the fingerprint statement | **arithmetic core done** (`libs/stark/fingerprint.zig`, verified against an oracle); AIR, transcript commitment order and tile aggregation pending. **Sumcheck is the critical path** | product decision |
+| **F4** | Multi-block recursion over the fingerprint statement | **arithmetic core done** and **commitment order enforced** (`fingerprint_bind.zig`: u, v drawn only after both roots are absorbed); measured 36–309× faster than the oracle. AIR and tile aggregation pending. **Sumcheck is the critical path** | product decision |
 
 ## F2 — STARK backend
 

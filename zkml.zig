@@ -28,6 +28,8 @@ pub const prove = @import("libs/prove/root.zig");
 // F2 STARK backend. Exported so tools (bench/gemm_bench.zig) and the F3
 // C API can reach the real prover without reaching into libs/ by path.
 pub const stark = @import("libs/stark/root.zig");
+pub const fingerprint = @import("libs/stark/fingerprint.zig");
+pub const fingerprint_bind = @import("libs/stark/fingerprint_bind.zig");
 pub const gemm_air = @import("libs/stark/gemm_air.zig");
 pub const gemm_chunk = @import("libs/stark/gemm_chunk.zig");
 pub const quant_binding = @import("libs/stark/quant_binding.zig");
@@ -95,6 +97,7 @@ test {
     _ = @import("libs/stark/routing_air.zig");
     _ = @import("libs/stark/routing_test.zig");
     _ = @import("libs/stark/fingerprint.zig");
+    _ = @import("libs/stark/fingerprint_bind.zig");
     _ = @import("libs/stark/gemm_air.zig");
     _ = @import("libs/stark/gemm_chunk.zig");
     _ = @import("libs/stark/chunk_binding.zig");

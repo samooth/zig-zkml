@@ -193,6 +193,36 @@ pub fn build(b: *std.Build) void {
     const bench_step = b.step("bench", "F2 bench: prover/verifier cost per GEMM layout (ReleaseFast)");
     bench_step.dependOn(&run_bench.step);
 
+    // bench/fingerprint_bench.zig measures the claim arithmetic that the
+    // fingerprint identity replaces: the oracle that forms the product
+    // against the factored form, on the same inputs. Same rule as above — its
+    // own ReleaseFast module, so the numbers describe a ReleaseFast build
+    // regardless of the -Doptimize the caller passed.
+    const fp_bench_lib_mod = b.createModule(.{
+        .root_source_file = b.path("zkml.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .imports = &.{
+            .{ .name = "zig-merkle", .module = zmerkle_mod },
+        },
+    });
+    const fp_bench_mod = b.createModule(.{
+        .root_source_file = b.path("bench/fingerprint_bench.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .imports = &.{
+            .{ .name = "zkml", .module = fp_bench_lib_mod },
+        },
+    });
+    const fp_bench_exe = b.addExecutable(.{
+        .name = "zkml_fingerprint_bench",
+        .root_module = fp_bench_mod,
+    });
+    const run_fp_bench = b.addRunArtifact(fp_bench_exe);
+    if (b.args) |bench_args| run_fp_bench.addArgs(bench_args);
+    const fp_bench_step = b.step("bench-fingerprint", "F4 bench: fingerprint claim vs the oracle it replaces (ReleaseFast)");
+    fp_bench_step.dependOn(&run_fp_bench.step);
+
     // --- Stage 4: ktransformers-zig reference glue (optional) ------------
     // Same shape as the llama adapter: CMake configure/build, gated test,
     // independent Python audit of the emitted root. Needs a built
