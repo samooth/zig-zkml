@@ -12,6 +12,7 @@ const tensor = @import("../tensor/root.zig");
 const stark = @import("root.zig");
 const gemm_air = @import("gemm_air.zig");
 const chunk = @import("gemm_chunk.zig");
+const cbind = @import("chunk_binding.zig");
 const Constraint = chunk.Constraint;
 
 const testing = std.testing;
@@ -258,4 +259,45 @@ test "chunk: unsupported reduction lengths are refused" {
     try testing.expectError(chunk.BuildError.RaggedReduction, chunk.system(250));
     try testing.expectError(chunk.BuildError.UnsupportedTraceSize, chunk.system(256));
     try testing.expectError(chunk.BuildError.RaggedReduction, chunk.system(240 + 1));
+}
+
+test "the chunked layout has the shape the docs claim" {
+    // §4.2 and docs/BLUE_PRINT.md quote 235 composed constraints and 254
+    // columns for the chunked layout, and use them to argue the cost of the
+    // layout against the per-MAC one. Those numbers come from a System built
+    // with a real operand binding, NOT from chunk.system(), which is the bare
+    // constraint skeleton — it composes 1. A number in prose that no test
+    // asserts rots silently, so it is pinned here.
+    //
+    // What is deliberately NOT asserted: that these are the *only* correct
+    // values. Changing the layout must move them, and the documentation has to
+    // change with it; the failure is what forces that conversation.
+    var bound = try cbind.buildSystem(testing.allocator, 240);
+    defer bound.deinit();
+    const sys = bound.system();
+
+    try testing.expectEqual(@as(usize, 235), sys.composedCount());
+    // maxColumn is a 0-based index, so the column count the bench prints is
+    // one more. Asserting the index here keeps the doc's "254 columns" honest.
+    try testing.expectEqual(@as(usize, 253), sys.maxColumn() orelse 0);
+    // The exemption is what makes the closing row safe; it must stay at 1.
+    try testing.expectEqual(@as(usize, 1), sys.transition_exemptions);
+}
+
+test "the chunked layout does not get cheaper as the reduction grows" {
+    // Columns and composed constraints are a function of the slot count
+    // alone, not of k. A documented cost that happened to hold at one
+    // reduction depth and not another would be worse than no number.
+    var a = try cbind.buildSystem(testing.allocator, 240);
+    defer a.deinit();
+    var b = try cbind.buildSystem(testing.allocator, 4080);
+    defer b.deinit();
+
+    try testing.expectEqual(a.system().composedCount(), b.system().composedCount());
+    try testing.expectEqual(
+        a.system().maxColumn() orelse 0,
+        b.system().maxColumn() orelse 0,
+    );
+    // Only the row count moves: a deeper reduction needs more chunk rows.
+    try testing.expect(try chunk.rowsFor(240) < try chunk.rowsFor(4080));
 }

@@ -357,6 +357,28 @@ libs/
 │   ├── norm/      # rmsnorm/layernorm (sumas por LogUp de rangos)
 │   ├── routing/   # group-top2 DeepSeek-V3 / top-k como lógica binaria
 │   └── attention/ # F5+: fuera de scope v1 (DeepProve como referencia)
+├── stark/         # [HECHO] backend STARK y AIRs
+│   ├── root.zig           #   prove()/verify(), cociente, transición, FRI
+│   ├── air_builder.zig    #   registro de constraints por índice
+│   ├── expr.zig           #   IR de constraints; System.trace_rows,
+│   │                      #   System.transition_exemptions
+│   ├── commit.zig         #   commitment de columnas + aperturas
+│   ├── gemm_air.zig       #   GEMM v1: 1 MAC/fila (referencia y oráculo)
+│   ├── gemm_chunk.zig     #   GEMM v1: 16 MACs/fila
+│   ├── quant_binding.zig  #   binding de operandos por formato (§4.2b)
+│   ├── chunk_binding.zig  #   escala compartida por chunk
+│   ├── scale_air.zig      #   procedencia fp16 de escalas (§4.2)
+│   ├── float_air.zig      #   multiplicación float bit-exacta
+│   ├── widen_air.zig      #   ensanchamiento exacto a fp32
+│   ├── barrel.zig         #   barrel shifter (descartado por medido)
+│   ├── logup.zig          #   núcleo LogUp (Haböck)
+│   ├── routing_air.zig    #   routing y segment selectors (§6.2)
+│   ├── range.zig          #   lookups de rango
+│   ├── float_format.zig   #   parámetros de formato float (F2, S2)
+│   ├── float_ref.zig      #   referencia float
+│   ├── fp16_ref.zig       #   referencia fp16
+│   ├── fingerprint.zig    #   [HECHO] núcleo aritmético del fingerprint (§5.1)
+│   └── fingerprint_bind.zig # [HECHO] orden de compromiso del reto (§5.1)
 ├── compile/       # F3+: CircuitGraph → AirGraph (§5.1)
 └── prove/         # F3+: orchestración prove()/verify(), recursion (F4)
 ```
