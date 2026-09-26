@@ -197,10 +197,10 @@ test "fingerprint claim equals the defining bilinear form" {
         Fp2.one, Fp2.one.neg(), Fp2.one,
     };
     const bv = [_]Fp2{
-        Fp2.one, Fp2.one,       Fp2.one,
-        Fp2.one, Fp2.zero,      Fp2.one,
-        Fp2.one, Fp2.one,       Fp2.one,
-        Fp2.one, Fp2.one,       Fp2.one.neg(),
+        Fp2.one, Fp2.one,  Fp2.one,
+        Fp2.one, Fp2.zero, Fp2.one,
+        Fp2.one, Fp2.one,  Fp2.one,
+        Fp2.one, Fp2.one,  Fp2.one.neg(),
     };
     const uv = [_]Fp2{ Fp2.one, Fp2.one };
     const vv = [_]Fp2{ Fp2.one, Fp2.one, Fp2.one, Fp2.one };
@@ -295,13 +295,13 @@ test "a zero entry in u removes exactly that row" {
 }
 
 test "a challenge carries its rank-1 factors, not a dense matrix" {
-    const c = try Challenge.init(&[_]Fp2{ Fp2.one }, &[_]Fp2{ Fp2.one });
+    const c = try Challenge.init(&[_]Fp2{Fp2.one}, &[_]Fp2{Fp2.one});
     try std.testing.expectEqual(@as(usize, 1), c.u.len);
     try std.testing.expectEqual(@as(usize, 1), c.v.len);
     // An empty factor is not a zero challenge: it would make the whole form
     // vacuously true, so it is rejected rather than folded to zero.
-    try std.testing.expectError(Error.InvalidShape, Challenge.init(&[_]Fp2{}, &[_]Fp2{ Fp2.one }));
-    try std.testing.expectError(Error.InvalidShape, Challenge.init(&[_]Fp2{ Fp2.one }, &[_]Fp2{}));
+    try std.testing.expectError(Error.InvalidShape, Challenge.init(&[_]Fp2{}, &[_]Fp2{Fp2.one}));
+    try std.testing.expectError(Error.InvalidShape, Challenge.init(&[_]Fp2{Fp2.one}, &[_]Fp2{}));
 }
 
 test "empty shape is rejected, never proved as zero" {
