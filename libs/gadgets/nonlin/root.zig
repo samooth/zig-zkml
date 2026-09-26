@@ -103,25 +103,56 @@ pub const SiLULookup = struct {
         break :blk t;
     };
 
-    /// 1/sqrt(x) on the q8.8 grid, for RMSNorm. Defined on the positive half
-    /// only: rsqrt of a non-positive sum of squares has no real value, and
-    /// letting it return 0 would silently make a degenerate norm look valid.
+    /// Largest mean of squares the table can represent, exclusive.
+    pub const rsqrt_max_mean: u32 = (@as(u32, 1) << 8) * table_size;
+    /// Shift is chosen per row, so no fixed floor applies; the value is the
+    /// largest legal shift, not a constant.
+    pub const rsqrt_max_shift: u8 = 24;
+
+    /// `rsqrt_q8_8[j] = round(256 / sqrt(j))`, in q8.8. Pure, with no notion
+    /// of a row or a scale.
+    ///
+    /// The per-row shift is applied by a **second** lookup rather than baked
+    /// in, because the correction is `2^(-shift/2)`: from
+    /// `mean = index · 2^shift` it follows that
+    ///
+    ///     256/sqrt(mean) = 256·2^(-shift/2) / sqrt(index)
+    ///
+    /// so the factor divides and is an integer only when `shift` is even. The
+    /// row shift is therefore normalised UP to even and the factor is read
+    /// from `rsqrt_shift_scale`. Rounding down is wrong: for a mean whose
+    /// bitlen is odd above 8 it pushes the index past the end of the table
+    /// (mean = 256 wants shift 1, and shift 0 asks for index 256 of 256). A single table cannot express this: an
+    /// earlier version tried, multiplied where it had to divide, and produced
+    /// a normalisation off by `2^(shift/2)` — 16x on a real int8 row.
+    ///
+    /// Index 0 has no finite value; it is 0 by construction, and callers must
+    /// reject a zero mean before indexing rather than read a zero and call it a
+    /// valid norm.
     pub const rsqrt_q8_8: [table_size]i16 = blk: {
         var t: [table_size]i16 = undefined;
         for (0..table_size) |i| {
-            const v: f32 = @floatFromInt(@as(u8, @intCast(i)));
-            if (v == 0.0) {
-                // 1/sqrt(0) has no finite value. Returning 0 here would make a
-                // degenerate norm look like a valid one, so the slot is marked
-                // by construction: callers must reject a zero sum of squares
-                // before indexing, and rmsnormFragment documents that.
+            if (i == 0) {
                 t[i] = 0;
             } else {
-                // q8.8 output, so the scale factor is 256. Using the q16.16
-                // factor 65536 overflows i16 at v=1 (65536 > 32767), which
-                // comptime rejects rather than silently wrapping.
+                const v = @as(f32, @floatFromInt(i));
                 t[i] = @intFromFloat(@round(256.0 / @sqrt(v)));
             }
+        }
+        break :blk t;
+    };
+
+    /// Number of shift-scale slots. `shift/2` cannot exceed 6 for int8 inputs
+    /// (the largest mean is 127² = 16129, and 16129 needs shift 6), so 8 slots
+    /// cover the domain with two to spare.
+    pub const rsqrt_scale_size: usize = 8;
+
+    /// `rsqrt_shift_scale[k] = 256 · 2^-k` in q8.8, the correction factor for a
+    /// row whose (even) shift is `2k`.
+    pub const rsqrt_shift_scale: [rsqrt_scale_size]i16 = blk: {
+        var t: [rsqrt_scale_size]i16 = undefined;
+        for (0..rsqrt_scale_size) |i| {
+            t[i] = @intFromFloat(@round(@as(f32, 256.0) / @as(f32, @floatFromInt(@as(u32, 1) << @intCast(i)))));
         }
         break :blk t;
     };
@@ -142,9 +173,23 @@ pub const SiLULookup = struct {
         absorb(&h, "silu", i16, &silu_q8_8);
         absorb(&h, "gelu_tanh", i16, &gelu_tanh_q8_8);
         absorb(&h, "rsqrt", i16, &rsqrt_q8_8);
+        absorbShort(&h, "rsqrt_shift_scale", i16, &rsqrt_shift_scale);
         var out: Hash = undefined;
         h.final(&out);
         return out;
+    }
+
+    fn absorbShort(h: anytype, label: []const u8, comptime T: type, values: *const [rsqrt_scale_size]T) void {
+        h.update(label);
+        h.update(&[_]u8{0});
+        var len: [8]u8 = [_]u8{0} ** 8;
+        std.mem.writeInt(u64, len[0..8], @sizeOf(T), .little);
+        h.update(&len);
+        for (values) |*v| {
+            var b: [@sizeOf(T)]u8 = undefined;
+            std.mem.writeInt(T, &b, v.*, .little);
+            h.update(&b);
+        }
     }
 
     fn absorb(h: anytype, label: []const u8, comptime T: type, values: *const [table_size]T) void {
@@ -250,6 +295,7 @@ fn digestWithSilu(alt: *const [table_size]i16) Hash {
     SiLULookup.absorb(&h, "silu", i16, alt);
     SiLULookup.absorb(&h, "gelu_tanh", i16, &SiLULookup.gelu_tanh_q8_8);
     SiLULookup.absorb(&h, "rsqrt", i16, &SiLULookup.rsqrt_q8_8);
+    SiLULookup.absorbShort(&h, "rsqrt_shift_scale", i16, &SiLULookup.rsqrt_shift_scale);
     var out: [32]u8 = undefined;
     h.final(&out);
     return out;
@@ -321,6 +367,11 @@ test "rsqrt is positive and decreasing on the positive domain" {
     // 1/sqrt(1) = 1 in q8.8, and 1/sqrt(255) ~ 0.0626 -> 16. Both ends are
     // checked because an off-by-one in the scale factor survives the
     // monotonicity check.
+    // With a per-row shift the table is 1/sqrt(j) directly, so index 1 is
+    // 1.0 (256 in q8.8) and index 255 is 1/sqrt(255) ≈ 0.0626 (16). Both ends
+    // are asserted because the scale factor is the convention: an off-by-8
+    // version of this table still decreases monotonically and would pass every
+    // shape check below.
     try std.testing.expectEqual(@as(i16, 256), SiLULookup.rsqrt_q8_8[1]);
     try std.testing.expectEqual(@as(i16, 16), SiLULookup.rsqrt_q8_8[255]);
 }

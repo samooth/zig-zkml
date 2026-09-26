@@ -78,12 +78,17 @@ verificaría. No es caro, es inviable.
   statement no estaría atando nada. Eso se verifica explícitamente.
 - **La statement sube a v2.** Las statements v1 no se aceptan: en v1 las
   activaciones no estaban atadas, así que una prueba v1 no dice qué SiLU corrió.
-- **RMSNorm y LayerNorm no están construidos.** Sus stubs anteriores emitían una
-  constraint `degree = 1` sin expresión, lo que es una falsificación y no un
-  gadget. Ahora `airFragment` falla a compilar, con la lista de lo que hace falta
-  en la cabecera del módulo. Su `rsqrt` ya está atado en el digest, así que la
-  parte que faltaba era la suma de cuadrados y una referencia float contra la
-  que probar.
+- **RMSNorm tiene referencia, no AIR.** `libs/stark/rmsnorm_ref.zig` es la
+  transcripción directa de la aritmética, sin sistema de constraints, y es lo
+  que un AIR futuro se prueba. Sus stubs anteriores emitían una constraint
+  `degree = 1` sin expresión, que es una falsificación y no un gadget; ahora
+  `airFragment` falla a compilar con los requisitos en la cabecera.
+- **La tabla `rsqrt` tuvo dos errores de diseño que la referencia cazó**, y
+  ninguno lo habría visto un test de forma: el dominio cubría `1/sqrt(v)` para
+  `v` en `[0, 255]` cuando la media de cuadrados de un int8 llega a 16129, y
+  la corrección `2^(-shift/2)` dividía y no multiplicaba. Un AIR sobre esa tabla
+  habría probado una normalización 8× débil. El shift por fila es lo que lo
+  resuelve, con la condición de que sea par.
 - El native path de cualquier engine sigue sin verificarse, y ahora está
   documentado como tal en vez de insinuado.
 

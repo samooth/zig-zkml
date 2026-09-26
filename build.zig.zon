@@ -3,13 +3,13 @@
     .fingerprint = 0x3d79605f4927d695,
     .version = "0.1.0",
     .dependencies = .{
+        .zig_zk = .{
+            .url = "https://github.com/samooth/zig-zk/archive/refs/tags/v0.2.1.tar.gz",
+            .hash = "zig_zk-0.2.1-B0HDkoyzCgAxje9hfn2r69hMLOJeib5vr4yHjoTnkn8x",
+        },
         .zig_algebra = .{
             .url = "git+https://github.com/samooth/zig-algebra#v0.3.2",
             .hash = "zig_algebra-0.3.2-PdVS05JfEwAc7M57KrjFSdjN2X4pIR6AxllIPzW6N85Q",
-        },
-        .zig_zk = .{
-            .url = "git+https://github.com/samooth/zig-zk#78f265ceb5e91d3887ddfd4954261d0b5f70ed62",
-            .hash = "zig_zk-0.1.0-B0HDknWHCgCgPhxWdDj7rd5O3Dh5VIs_AETPQCrJ3hYX",
         },
     },
     .paths = .{""},
