@@ -1,4 +1,4 @@
-//! C ABI — F0/F1/F5 surface for host inference engines (BLUE_PRINT §8).
+//! C ABI — F0/F1/F5 surface for host inference engines (docs/BLUE_PRINT.md §8).
 //!
 //! Conventions (mirroring the engine-adapter pattern):
 //!   - Opaque handle (`ZKML_Attestor` / `ZKML_Witness`); allocator passed
@@ -215,7 +215,7 @@ pub export fn zkml_proof_verify(
 // --- Deterministic transcript seed (F1) ---
 
 /// Derive a deterministic 32-byte sampling seed from a context
-/// (BLUE_PRINT §8: reproducible sampling with no hidden state: same
+/// (docs/BLUE_PRINT.md §8: reproducible sampling with no hidden state: same
 /// context → same seed, always).
 pub export fn zkml_transcript_seed(
     context: ?[*]const u8,
@@ -312,7 +312,7 @@ pub export fn zkml_witness_end_layer(self: *ZKML_Witness) i32 {
     return @intFromEnum(Status.ok);
 }
 
-/// Finalize: absorb all recorded slots in CANONICAL order (BLUE_PRINT
+/// Finalize: absorb all recorded slots in CANONICAL order (docs/BLUE_PRINT.md
 /// §6.2) bound to `stmt_hash`, writing the 32-byte trace hash to
 /// `trace_hash_out`. Freezes the session (no further recording).
 pub export fn zkml_witness_finalize(
@@ -341,7 +341,7 @@ pub export fn zkml_witness_session_destroy(self: ?*ZKML_Witness) void {
 }
 
 comptime {
-    // Force emission (BLUE_PRINT §8: comptime { _ = &fn } verified with nm).
+    // Force emission (docs/BLUE_PRINT.md §8: comptime { _ = &fn } verified with nm).
     _ = &zkml_allocator_process;
     _ = &zkml_attestor_create;
     _ = &zkml_attestor_add;

@@ -1,6 +1,6 @@
 //! Non-linear activation lookups — SiLU, GELU, softmax-step.
 //!
-//! BLUE_PRINT §4.3: non-linearities are always LogUp lookups over precomputed
+//! docs/BLUE_PRINT.md §4.3: non-linearities are always LogUp lookups over precomputed
 //! tables. SiLU output (i16 q8.8) is proven with 2 byte lookups (high + low),
 //! never a single 2^16 table.
 //!
@@ -12,12 +12,12 @@
 //! bit. A proof built from this gadget would attest a function the engine
 //! does not run.
 //!
-//! What is actually required, per the architecture decision in TODO.md:
+//! What is actually required, per the architecture decision in docs/BLUE_PRINT.md:
 //! the statement must PIN the implementation (engine + version + kernel
 //! variant) and prove THAT function — which, for a polynomial
 //! approximation, means bit-exact float arithmetic, not a table. See
 //! `libs/stark/float_air.zig` for what that costs (108 composed constraints
-//! per multiply) and BLUE_PRINT §4.3 for the correction.
+//! per multiply) and docs/BLUE_PRINT.md §4.3 for the correction.
 
 const std = @import("std");
 const tensor = @import("../../tensor/root.zig");

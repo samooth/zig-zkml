@@ -3,7 +3,7 @@
 > Documento de diseño, en español como el resto de la especificación.
 > Cubre `libs/stark/expr.zig`, `root.zig`, `gemm_air.zig`, `gemm_chunk.zig`,
 > `scale_air.zig`, `quant_binding.zig` y `chunk_binding.zig`.
-> La especificación de sistema sigue en [BLUE_PRINT.md](../BLUE_PRINT.md);
+> La especificación de sistema sigue en [BLUE_PRINT.md](BLUE_PRINT.md);
 > aquí está el *por qué*, con las mediciones que lo justifican.
 
 Tres huecos de soundness de F2, los tres cerrados. Todos son el mismo tipo de

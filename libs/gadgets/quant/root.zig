@@ -1,7 +1,7 @@
 //! Quantization gadgets — dequant/requant, fp8/mxfp8 reencode, and GGML
 //! block-scale handling.
 //!
-//! BLUE_PRINT §4.2: every scheme carries a comptime magnitude bound M and
+//! docs/BLUE_PRINT.md §4.2: every scheme carries a comptime magnitude bound M and
 //! the AIR generates range proofs via LogUp on bytes (§4.3).
 
 const std = @import("std");

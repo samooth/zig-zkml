@@ -338,7 +338,7 @@ test "barrel: it proves, verifies, and rejects a forged shift" {
 // per row — the chunk size — would then need tens of thousands of composed
 // constraints, and the verifier keeps its Fiat-Shamir alphas in a fixed
 // stack array sized by `max_composed_constraints`. So the proof's
-// accumulation stays the EXACT field sum (see BLUE_PRINT §3.1, the
+// accumulation stays the EXACT field sum (see docs/BLUE_PRINT.md §3.1, the
 // normative QuantScheme) and the fp32 semantics live in the cross-check
 // test, where `float_ref.add` is the reference.
 test "the fp32 adder's alignment shift, measured" {
@@ -358,7 +358,7 @@ test "the fp32 adder's alignment shift, measured" {
     // Sixteen adds per row — the chunk size — would put the composed
     // constraints an order of magnitude past what the verifier's alpha
     // array is sized for, so the proof's accumulation stays the EXACT field
-    // sum (BLUE_PRINT §3.1's normative QuantScheme) and the fp32 semantics
+    // sum (docs/BLUE_PRINT.md §3.1's normative QuantScheme) and the fp32 semantics
     // live in the cross-check, where `float_ref.add` is the reference.
     inline for (.{ .{ 11, 4 }, .{ 24, 8 }, .{ 24, 6 } }) |shape| {
         const width: u16 = comptime shape[0];

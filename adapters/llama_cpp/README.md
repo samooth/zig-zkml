@@ -1,6 +1,6 @@
 # llama.cpp attestation adapter (zero-fork)
 
-Stage 1 of [`PLAN_MULTI_ENGINE.md`](../../PLAN_MULTI_ENGINE.md). Streams every
+Stage 1 of [`PLAN_MULTI_ENGINE.md`](../../docs/PLAN_MULTI_ENGINE.md). Streams every
 tensor of a GGUF file into zig-zkml's weights attestation
 (`zkml_attestor_*`) and exposes the 32-byte Merkle root. Uses only the
 public `gguf.h` reader API — the same container walk as

@@ -1,6 +1,6 @@
 # zig-ai adapter (same-language, no FFI)
 
-Stage 2 of [`PLAN_MULTI_ENGINE.md`](../../PLAN_MULTI_ENGINE.md). zig-ai and
+Stage 2 of [`PLAN_MULTI_ENGINE.md`](../../docs/PLAN_MULTI_ENGINE.md). zig-ai and
 zig-zkml are both Zig 0.16.0 stable, so the adapter is a **module import** —
 no C ABI, no FFI, no CMake. zig-ai is a sibling repo and is **not** edited
 from here; the exact patches it needs are below.
@@ -26,7 +26,7 @@ each tensor once and never retains it).
 
 ## Patch 1 — dependency
 
-`zig-ai/build.zig.zon`:
+el `build.zig.zon` del proyecto zig-ai:
 
 ```zig
 .dependencies = .{

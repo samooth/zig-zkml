@@ -24,13 +24,13 @@ The plan was **reordered by what was measured** — the sumcheck prover became
 the critical path, and the weight layer and the witness source became F2/F3
 requirements rather than later work.
 
-**Documentation.** [BLUE_PRINT.md](BLUE_PRINT.md) is the authoritative
-technical design. [docs/soundness-operand-binding.md](docs/soundness-operand-binding.md)
-records the F2 soundness reasoning and the measurements behind it (cyclic
-domain, closing-row exemptions, scale provenance).
-[PLAN_MULTI_ENGINE.md](PLAN_MULTI_ENGINE.md) covers the adapter matrix and
-staging. All three are in Spanish. [zkML.md](zkML.md) is the earlier
-motivation document; BLUE_PRINT supersedes its open decisions.
+**Documentation.** [docs/BLUE_PRINT.md](docs/BLUE_PRINT.md) is the
+authoritative technical design. [docs/soundness.md](docs/soundness.md) records
+the F2 soundness reasoning and the measurements behind it (cyclic domain,
+closing-row exemptions, scale provenance).
+[docs/PLAN_MULTI_ENGINE.md](docs/PLAN_MULTI_ENGINE.md) covers the adapter
+matrix and staging. Design decisions are logged under
+[docs/decisions/](docs/decisions/). All of these are in Spanish.
 
 ## Contents
 
@@ -55,7 +55,7 @@ served inference:
 | (b) Weight privacy | The prover uses W without revealing it | future extension |
 | (c) Both (zkVM-style) | (a) + (b) | out of scope (671B models) |
 
-Key design decisions, with full rationale in [BLUE_PRINT.md](BLUE_PRINT.md):
+Key design decisions, with full rationale in [docs/BLUE_PRINT.md](docs/BLUE_PRINT.md):
 
 - **Exact-arithmetic contract** — in recorded mode the kernels run the gadget's
   exact arithmetic (integer accumulators, fixed-point scales, lookup-table
@@ -93,11 +93,11 @@ module's file set, so every library is a file import:
 ```text
 zkml.zig              module root: re-exports everything, collects all tests
 include/
-  zkml_c.h            C ABI (zkml_* — F0/F1 surface, BLUE_PRINT §8)
+  zkml_c.h            C ABI (zkml_* — F0/F1 surface, docs/BLUE_PRINT.md §8)
   zkml_engine.h       engine adapter contract: weight stream, witness
                       hooks, prove/verify lifecycle, stage checklist
 adapters/             per-engine integration matrix; llama.cpp, zig-ai,
-                      vLLM, ktransformers (see PLAN_MULTI_ENGINE.md)
+                      vLLM, ktransformers (see docs/PLAN_MULTI_ENGINE.md)
 libs/
   field.zig           Goldilocks p = 2^61−1 (vendored L0)
   merkle.zig          Blake3 tree: cached root, orphan self-pairing,
@@ -220,19 +220,19 @@ viable today**; state of the art is ≤1B parameters with dedicated teams.
   audit tool and `zig build verify`
 - [zig-algebra](https://github.com/samooth/zig-algebra) (L0) and
   [zig-zk](https://github.com/samooth/zig-zk) (L1) — not needed until F2
-  (F0/F1 are self-contained in `libs/`); see BLUE_PRINT.md §12
+  (F0/F1 are self-contained in `libs/`); see docs/BLUE_PRINT.md §12
 - Linux x86_64 (primary)
 - Per-adapter extras: a **built** llama.cpp checkout + CMake, vLLM + ctypes,
   and a **built** ktransformers-zig checkout — see `adapters/`
 
 ## Documentation
 
-- [BLUE_PRINT.md](BLUE_PRINT.md) — authoritative technical design (Spanish)
-- [PLAN_MULTI_ENGINE.md](PLAN_MULTI_ENGINE.md) — adapter matrix, staging,
+- [docs/BLUE_PRINT.md](docs/BLUE_PRINT.md) — authoritative technical design (Spanish)
+- [docs/PLAN_MULTI_ENGINE.md](docs/PLAN_MULTI_ENGINE.md) — adapter matrix, staging,
   llama.cpp wrapper pros/cons (Spanish)
-- [docs/soundness-operand-binding.md](docs/soundness-operand-binding.md) —
-  F2 soundness design notes and the measurements behind the choices (Spanish)
-- [zkML.md](zkML.md) — motivation and prior-art survey (Spanish)
+- [docs/soundness.md](docs/soundness.md) — F2 soundness design notes and the
+  measurements behind the choices (Spanish)
+- [docs/decisions/](docs/decisions/) — decision log (ADRs)
 
 ## License
 

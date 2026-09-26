@@ -8,7 +8,7 @@
 //! the QUOTIENT of the composed constraint polynomial, which is low-degree
 //! precisely when the trace satisfies the AIR.
 //!
-//! Protocol (monolithic, per layer — BLUE_PRINT §5.2 v1):
+//! Protocol (monolithic, per layer — docs/BLUE_PRINT.md §5.2 v1):
 //!
 //!   H   = H_k      trace domain, n = 2^k rows
 //!   LDE = H_{k+b}  subgroup LDE, b chosen from the AIR degree

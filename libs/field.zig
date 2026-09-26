@@ -1,13 +1,13 @@
 //! Finite field arithmetic — Goldilocks prime field p = 2^61 - 1.
 //!
-//! Own minimal L0 (BLUE_PRINT §2: "200 líneas propias" fallback for the
+//! Own minimal L0 (docs/BLUE_PRINT.md §2: "200 líneas propias" fallback for the
 //! zig-algebra path dependency, which cannot be fetched due to the
 //! 0.16.0-dev semver lock). Only what zkML needs: add/sub/mul with lazy
 //! reduction, pow/inverse, and serialization for hashing.
 //!
 //! Invariants: every arithmetic path stays < 2^61·k for at most one
 //! unreduced step (lazy reduction allowed exactly once — see
-//! BLUE_PRINT §4.2 for the derivation of the accumulation budgets).
+//! docs/BLUE_PRINT.md §4.2 for the derivation of the accumulation budgets).
 
 const std = @import("std");
 

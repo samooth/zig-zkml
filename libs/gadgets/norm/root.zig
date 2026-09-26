@@ -1,6 +1,6 @@
 //! Normalization gadgets — RMSNorm and LayerNorm.
 //!
-//! BLUE_PRINT §4.3: sums are proven by LogUp of ranges (byte lookups).
+//! docs/BLUE_PRINT.md §4.3: sums are proven by LogUp of ranges (byte lookups).
 
 const std = @import("std");
 const tensor = @import("../../tensor/root.zig");

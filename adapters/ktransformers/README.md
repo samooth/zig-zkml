@@ -17,7 +17,7 @@ never modified from here — this compiles against ktransformers-zig's own
 
 ## Mapping: engine names → core calls
 
-The engine's design doc (`zkML.md`) sketched the F0/F1 surface as
+The original design doc sketched the F0/F1 surface as
 `kt_weights_merkle_root`, `kt_mla_weights_merkle_root` and
 `kt_transcript_seed`. The glue prefixes everything with `kt_zkml_` instead
 of claiming those names, so a future implementation inside the engine cannot

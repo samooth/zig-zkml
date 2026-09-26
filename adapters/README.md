@@ -16,7 +16,7 @@ documented as READMEs next to the adapter code.
 All four ship a negative test and are cross-checked against
 `tools/verify_weights.py`.
 
-Staging, per-file work items and gates: [`../PLAN_MULTI_ENGINE.md`](../PLAN_MULTI_ENGINE.md).
+Staging, per-file work items and gates: [`../docs/PLAN_MULTI_ENGINE.md`](../docs/PLAN_MULTI_ENGINE.md).
 
 Rules that apply to every adapter:
 

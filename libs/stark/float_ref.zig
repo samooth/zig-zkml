@@ -208,7 +208,7 @@ fn packSpecial(f: Format, sign: u1, which: enum { zero, inf }) u16 {
 /// top bit set, which every IEEE-754 producer recognises and no arithmetic
 /// operation turns into a number.
 /// IEEE-754 addition, ONE rounding, for the cross-check of §3.1 in
-/// BLUE_PRINT.md: the native fast path accumulates in fp32 and the test
+/// docs/BLUE_PRINT.md: the native fast path accumulates in fp32 and the test
 /// that compares it against the proof's contract needs a reference that
 /// rounds exactly once, in the same order, per step.
 ///
@@ -217,7 +217,7 @@ fn packSpecial(f: Format, sign: u1, which: enum { zero, inf }) u16 {
 /// add (the alignment shift alone is a 24-bit, 7-stage barrel), and sixteen
 /// adds per row would need an alpha array two orders of magnitude larger
 /// than the verifier keeps on its stack. The contract the proof verifies is
-/// the EXACT field sum — see the cost measurement in TODO.md.
+/// the EXACT field sum — see the cost measurement in docs/BLUE_PRINT.md.
 ///
 /// The same discipline as `multiply`: the exact sum is an integer, and it
 /// is rounded ONCE, at the end, into the target grid. Nothing here rounds

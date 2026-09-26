@@ -1,5 +1,5 @@
 //! GEMM gadget — C[m,n] = dequant(A[m,k]) · dequant(B[k,n]) verified via
-//! running-sum AIR with 16 MACs per row (BLUE_PRINT §7.3).
+//! running-sum AIR with 16 MACs per row (docs/BLUE_PRINT.md §7.3).
 //!
 //! v1: monolithic AIR per layer. The witness comes from the exact-path
 //! kernel (§3 dual-path), not the fast path.

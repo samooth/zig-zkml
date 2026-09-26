@@ -9,7 +9,7 @@
 //!   nibble in [0, 15]        Q4_K nibble, GGML convention: raw - 8
 //!   value  == (nibble - 8) * scale
 //!
-//! This is the range-check half of the LogUp argument (BLUE_PRINT §7.4):
+//! This is the range-check half of the LogUp argument (docs/BLUE_PRINT.md §7.4):
 //! a value is decomposed into bits and each bit is pinned by
 //! `b * (b - 1) = 0`, which is quadratic and therefore expressible in the
 //! existing IR. What is NOT here is the *lookup* half (membership in a

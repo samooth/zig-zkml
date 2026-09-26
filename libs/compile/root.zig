@@ -1,11 +1,11 @@
 //! L3 compiler — CircuitGraph → AirGraph.
 //!
-//! BLUE_PRINT §5.1/§7.1: gadgets emit `air.Fragment` instances with dimension
+//! docs/BLUE_PRINT.md §5.1/§7.1: gadgets emit `air.Fragment` instances with dimension
 //! holes. The compiler instantiates those holes, merges columns/constraints/
 //! lookups across fragments, and produces a single `AirGraph` consumable by
 //! the L1 STARK prover (zig-zk).
 //!
-//! v1 strategy: monolithic AIR per layer (BLUE_PRINT §5.2). No cross-fragment
+//! v1 strategy: monolithic AIR per layer (docs/BLUE_PRINT.md §5.2). No cross-fragment
 //! composition — the compiler concatenates gadgets into one trace.
 
 const std = @import("std");

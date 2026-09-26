@@ -1,6 +1,6 @@
 //! Quantization schemes and tensor types for zkML gadgets.
 //!
-//! BLUE_PRINT §4.2: each scheme declares a comptime magnitude bound M
+//! docs/BLUE_PRINT.md §4.2: each scheme declares a comptime magnitude bound M
 //! and the corresponding range proof bits. The AIR generates range proofs
 //! by LogUp on bytes (§4.3).
 //!
@@ -64,7 +64,7 @@ pub const Fp16Error = error{
 /// m ∈ [0, 1023]. In q4.22: value·2^22 = (1024 + m)·2^(e+12), which is
 /// an integer exactly when e ≥ −12 and below the 2^26 budget when
 /// e ≤ 3 (value < 16 = 2^4). The accepted range is therefore
-/// |scale| ∈ [2^-12, 2^4) — matching BLUE_PRINT §4.2's budget note.
+/// |scale| ∈ [2^-12, 2^4) — matching docs/BLUE_PRINT.md §4.2's budget note.
 pub fn fp16ToFixedQ4_22(v: u16) Fp16Error!u64 {
     const f = Fp16.fromBits(v);
     if (f.isInfOrNan()) return error.ScaleNotFinite;
@@ -135,7 +135,7 @@ pub const Scheme = enum(u8) {
 };
 
 /// Quantized tensor — a 2D matrix of quantized values with optional scales.
-/// The scheme is part of the type (BLUE_PRINT §7.2: "parte del TIPO").
+/// The scheme is part of the type (docs/BLUE_PRINT.md §7.2: "parte del TIPO").
 pub fn QuantTensor(comptime scheme: Scheme) type {
     return struct {
         const Self = @This();

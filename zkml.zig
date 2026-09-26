@@ -3,11 +3,11 @@
 //!
 //! Single module root: all libraries are file imports so unit tests in
 //! every file are collected by `zig build test` (test blocks are only
-//! gathered from the root module's file set — see BLUE_PRINT §13).
+//! gathered from the root module's file set — see docs/docs/BLUE_PRINT.md.md §13).
 //!
 //! Phase: F0/F1 (weights attestation + deterministic transcript) plus the
 //! L0/L2 foundations (field, merkle, transcript, tensor, trace, statement).
-//! The STARK prover (F2+) will build on this; see BLUE_PRINT.md.
+//! The STARK prover (F2+) will build on this; see docs/BLUE_PRINT.md.
 
 const std = @import("std");
 

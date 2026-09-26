@@ -1,6 +1,6 @@
 //! Statement — public inputs for the zkML proof.
 //!
-//! BLUE_PRINT §6.1: without H(X)/H(Y) a malicious prover chooses X',Y'.
+//! docs/BLUE_PRINT.md §6.1: without H(X)/H(Y) a malicious prover chooses X',Y'.
 //! Without weights_leaf he chooses W'. Without scheme_ids he chooses
 //! cheaper arithmetic. The statement makes all of this binding.
 

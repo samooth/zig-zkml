@@ -1,6 +1,6 @@
 # vLLM adapter (ctypes over libzkml.so)
 
-Stage 3 of [`PLAN_MULTI_ENGINE.md`](../../PLAN_MULTI_ENGINE.md). vLLM is
+Stage 3 of [`PLAN_MULTI_ENGINE.md`](../../docs/PLAN_MULTI_ENGINE.md). vLLM is
 Python, so the adapter talks to the core through the shared library
 (`zig-out/lib/libzkml.so`, added in Stage 1) using `ctypes` — no compiled
 extension, no Cython, no build step for the plugin itself.

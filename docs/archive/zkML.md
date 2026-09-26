@@ -1,5 +1,10 @@
 # zkML.md — Diseño de una librería zkML en Zig y su integración con ktransformers-zig
 
+> **Documento histórico, superado.** Se conserva solo por su encuesta de
+> estado del arte y su apéndice de toolchain. Las decisiones de diseño
+> vigentes están en [BLUE_PRINT.md](../BLUE_PRINT.md); el contraste entre
+> ambos está en [ADR-0001](../decisions/ADR-0001-zkml-vs-blueprint.md).
+>
 > Evaluación motivada por el estudio de `samooth/zig-algebra` y `samooth/zig-zk`
 > (septiembre 2026). Ninguno de los dos se adopta como dependencia hoy; este
 > documento describe **qué sí serviría** y cómo debería diseñarse la pieza que

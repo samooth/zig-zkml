@@ -1,8 +1,8 @@
 # BLUE_PRINT.md — zig-zkml: blueprint técnico de la librería
 
 > Este documento es la especificación de diseño autoritativa de `zig-zkml`.
-> Corrige y concreta las decisiones abiertas de `zkML.md` (que queda como
-> documento histórico de motivación). Convenciones Zig 0.16 según
+> Especifica el sistema tal como está; el historial de decisiones vive en
+> [`decisions/`](decisions/). Convenciones Zig 0.16 según
 > `LESSONS_ZIG.md` de ktransformers-zig (ArrayList unmanaged, allocator
 > explícito, shapes runtime, `comptime` solo para esquemas/backend).
 >
@@ -16,23 +16,14 @@
 > de las decisiones de soundness del F2 —el dominio cíclico, por qué la fila
 > de cierre necesita exenciones, por qué un flag no valía, y las mediciones
 > que descartaron el barrel shifter— está en
-> [`docs/soundness-operand-binding.md`](docs/soundness-operand-binding.md).
+> [`soundness.md`](soundness.md).
 
-## 0. Cambios respecto a zkML.md
+## 0. Decisiones
 
-| # | zkML.md decía | Este blueprint decide | § |
-|---|---|---|---|
-| 1 | La inferencia nativa (FP32/BF16) ES el witness | **Contrato de aritmética exacta**: en modo recorded el kernel ejecuta la aritmética del gadget (dual-path); bit-exactness es invariante verificable | §3 |
-| 2 | Binius y Goldilocks mezclados dentro del mismo gadget | **Backend único Goldilocks en v1**; Binius diferido a F4+ (evita composición cross-domain) | §4 |
-| 3 | Merkle root de pesos sirve a F3 | Los pesos van como **columnas comprometidas en la traza STARK**; el root Merkle (F0) coexiste como attestation y se liga vía hash column Poseidon2 | §5 |
-| 4 | Statement implícito | **Public inputs completos** (`H(X)`, `H(Y)`, layer/expert, leaf de pesos, esquema, params) + orden canónico del transcript | §6 |
-| 5 | "2048/1408 del experto, DeepSeek-V3" | 2048/1408 es **Qwen3-Next**; DeepSeek-V3 es 7168/2048. Ambas shapes, etiquetadas | §10 |
-| 6 | `Constraints{.kind = .sumcheck_fingerprint}` (L2→L1 hand-wave) | **AirGraph** como interfaz formal L3→L1; composición monolítica v1 (AIR por capa) y protocolo fingerprint v2 (GKR/sumcheck) como optimización F4 | §5, §7 |
-| 7 | Sin nivel de seguridad ni parámetros | Tabla de parámetros y objetivo ≥80 bits (conjeturado) | §9 |
-| 8 | Nits de código: `catch unreachable`, `Shake256 = undefined`, tabla SiLU "int8" siendo `i16`, sin `kt_proof_free` | Todos corregidos en los sketches | §7, §8 |
-
-Cita corregida: los lookups tipo LogUp son de **Haböck** (zkML.md escribía
-"Tabrenheim").
+Este documento especifica el estado actual del sistema, no su historia.
+Las decisiones que lo definieron están registradas como ADR en
+[decisions/](decisions/); el contraste con el diseño inicial está en
+[ADR-0001](decisions/ADR-0001-zkml-vs-blueprint.md).
 
 ## 1. Alcance y threat model
 
@@ -96,7 +87,7 @@ decisión es no tener relleno:
   constraints sean satisfechas.
 
 **Exención de la fila de cierre** (ver
-[`docs/soundness-operand-binding.md` §2](docs/soundness-operand-binding.md)
+[`soundness.md` §2](soundness.md)
 para el razonamiento completo). La última fila es sintética: la wrap obliga
 a que aporte `−C`, así que sus operandos no son operandos del modelo. El
 divisor del cociente es `(X^n − 1)/Π(X − g^(n−1−i))` y las compuestas no se
@@ -163,9 +154,9 @@ proof **inválido**. La resolución es un contrato dual:
 
 ### 4.1 Por qué un solo campo
 
-zkML.md mezclaba torres GF(2^n) (Binius, para nibbles/int8) y Goldilocks
-(scales/acumuladores) dentro del mismo gadget Q4_K. Componer dos dominios
-en una prueba es problema abierto. Decisión: **v1 = Goldilocks para todo**;
+Componer dos dominios en una prueba es problema abierto, así que no se
+mezclan torres GF(2^n) (Binius, para nibbles/int8) con Goldilocks
+(scales/acumuladores) dentro de un mismo gadget. **v1 = Goldilocks para todo**;
 los int8/q4 caben de sobra en Goldilocks (una celda = un elemento, range
 proof por LogUp de bytes). Binius (donde 1 byte = 8 wires y el sumcheck
 bitsliceado es más barato) se retoma en F4+ como backend alternativo
@@ -215,8 +206,8 @@ Notas:
 - **Los formatos float no necesitan constraints de dequant**: bf16→fp32 y
   fp8→fp32 son ensanchamientos exactos, así que para esos tensores el coste
   entero es el AIR float, no los pesos.
-- MXFP8 (que faltaba en el enum de zkML.md): scale UE8M0 por grupo de 32 es
-  potencia de 2 → lookup pow2 directo, el esquema más barato de reencuadre.
+- MXFP8: scale UE8M0 por grupo de 32 es potencia de 2 → lookup pow2 directo,
+  el esquema más barato de reencuadre.
 - **Estabilidad del enum `Scheme`**: los ordinales se serializan en el
   statement (`@intFromEnum`). Nunca reordenar/renumerar; solo añadir al
   final y bump de `statement_version`.
@@ -338,8 +329,8 @@ Fiat-Shamir irreproducible. Diseño:
   absorber.
 - `finalize()` absorbe en **orden canónico** (layer → op → expert → rank),
   cada evento como `tag || len || bytes`.
-- El `Shake256` se inicializa de verdad (fix del sketch de zkML.md) y su
-  estado inicial es `domain_separator || statement_serialized`.
+- El `Shake256` se inicializa de verdad; su estado inicial es
+  `domain_separator || statement_serialized`.
 
 ## 7. Módulos y API (Zig 0.16)
 
@@ -487,7 +478,7 @@ pub fn GemmGadget(
 
 /// SwiGLU: gate_out * silu(gate_out).
 /// Entrada: gate_out REQUANTIZADO a int8 (paso obligatorio del esquema,
-/// el lookup es sobre la rejilla int8, no sobre BF16 — fix de zkML.md).
+/// el lookup es sobre la rejilla int8, no sobre BF16).
 /// Salida: silu(x)·2^8 en q8.8 i16 (|silu(x)| ≤ ~128 < 2^15 ✓),
 /// probada con 2 lookups de byte, no una tabla de 2^16.
 pub const SwigluLookup = struct {
@@ -680,7 +671,7 @@ statement → proofs antiguos no verifican contra params nuevos.
 
 | Modelo | gate/up por experto | down por experto | MACs por bloque experto (decode) |
 |---|---|---|---|
-| **Qwen3-Next** (2048/1408 — zkML.md lo atribuía erróneamente a DeepSeek-V3) | 2048×1408 ×2 | 1408×2048 | 8.6M |
+| **Qwen3-Next** | 2048×1408 ×2 | 1408×2048 | 8.6M |
 | **DeepSeek-V3** | 7168×2048 ×2 | 2048×7168 | 44M |
 
 | Operación | Nativo | Prover v1 (estimado) | Ratio |
@@ -710,8 +701,9 @@ recalibran con el bench de F2. Los números duros de go/no-go están en §11.
 | **F3** | `zkml_prove_layer`/`zkml_verify_layer` para 1 capa (shapes reales); binding Poseidon2 traza↔leaf; bench por bloque | F2 | proof < 1 MB, verify < 100 ms, test negativo ±1 ulp RECHAZA |
 | **F4** | recursion multi-bloque sobre el statement fingerprint; Groth16 wrap solo si on-chain | el **sumcheck v2 sube a CAMINO CRÍTICO** (ROADMAP S3): sin él, probar por elemento de salida cuesta ~16 días por tile 2048×1408 (236 µs/MAC en el layout de 1 MAC/fila, 83 µs/MAC en el chunked) y ni siquiera el AIR float (158-394 constraints por operación según el formato) es asequible | overhead GEMM < 50x; decisión de producto |
 
-Vendorear por defecto (path dep + tarball hash); fork propio en
-Se adopta upstream cuando zig-zk/zig-algebra publique el tag v0.3.2.
+Las dependencias se fijan por tag y hash de paquete (`build.zig.zon`), no por
+rama: `zig-algebra` está en `#v0.3.2` y `zig-zk` declarado. Cuando una de ellas
+publica un tag incompatible se prefiere un fork propio sobre mezclar versiones.
 
 ## 12. Riesgos y mitigaciones
 
@@ -722,7 +714,7 @@ Se adopta upstream cuando zig-zk/zig-algebra publique el tag v0.3.2.
 | Upstream zig-zk/zig-algebra: un solo autor y tag v0.3.2 recién publicado (etiquetado por tags firmados; el manifiesto ahora sí declara `.version = "0.3.2"`) | medio | fijar tag/commit exacto y hash; mantener el consumo restringido a `zig-merkle` y auditar cualquier módulo criptográfico antes de cambiar de pin |
 | Padding o dominio de trace elegido por el prover | alto (cerrado en F2 local) | `System.trace_rows` es parte de la statement; `prove` y `verify` rechazan cualquier dominio distinto. 1 MAC/fila exige `k = 2^m−1`; chunked exige `k = 16·(2^m−1)` y rechaza ragged. Los dos sets son disjuntos, así que la agregación de una capa completa necesita el plumbing de public inputs de F3 |
 | Fila de cierre convertida en operando falsificable | alto (cerrado en F2 local) | La wrap obliga a que la última fila aporte `−C`, luego sus operandos no son del modelo y no pueden llevar binding por fila. `System.transition_exemptions` (divisor `Z_H/Π`, el mecanismo de Winterfell) exime esa fila de las compuestas, y el claim pasa a leerse de `s[last] = c[last]`. Un flag `is_last` no habría servido: one-hotness no es derivable en un dominio cíclico, y `flag·(cuadrática)` da grado 3 |
-| Escala de dequantización fabricada | alto (cerrado en F2 local) | `scale_air` (ver [`docs/`](docs/soundness-operand-binding.md) §3) prueba `u = ±(2^10+m)·2^s` con un selector one-hot de 4 bits (21 compuestas, 29 columnas por escala), en vez del barrel shifter que se medió en 131 compuestas y 157 columnas. Esto fija *qué* escala es válida, no *cuál* del modelo: atar el patrón fp16 al fichero de pesos es el commitment de F3 |
+| Escala de dequantización fabricada | alto (cerrado en F2 local) | `scale_air` (ver [`soundness.md`](soundness.md) §3) prueba `u = ±(2^10+m)·2^s` con un selector one-hot de 4 bits (21 compuestas, 29 columnas por escala), en vez del barrel shifter que se medió en 131 compuestas y 157 columnas. Esto fija *qué* escala es válida, no *cuál* del modelo: atar el patrón fp16 al fichero de pesos es el commitment de F3 |
 | Divergencia aritmética exacta vs fast path mayor que epsilon | medio | contrato §3 + cross-check continuo por capa en CI; si diverge, el esquema no captura al kernel y se corrige el esquema (o el kernel) antes de avanzar |
 | Coste binding Poseidon2 de pesos (2–4x en layer proof) | medio | amortización por sesión (hash column una vez por (layer, expert)); bench en F3 decide |
 | Composición cross-protocol (GEMM sumcheck + AIR + lookups) | medio en F4 | v1 monolítica evita el problema hasta que el stack funciona; v2 cambia solo el gadget GEMM |
@@ -821,6 +813,5 @@ código demuestre lo contrario:
 
 ---
 
-*Este blueprint corrige y sustituye las decisiones abiertas de zkML.md. El
-item accionable barato hoy sigue siendo F0 (attestation de pesos); F2 no
+*El item accionable barato hoy sigue siendo F0 (attestation de pesos); F2 no
 arranca sin los dos spikes (toolchain semver, STARK Goldilocks) resueltos.*

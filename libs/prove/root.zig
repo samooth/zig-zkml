@@ -1,6 +1,6 @@
 //! Minimal STARK adapter — bridges L3 AirGraph to L1 FRI.
 //!
-//! BLUE_PRINT §5.1/§7.1: the trace is flattened row-major into Fp2
+//! docs/BLUE_PRINT.md §5.1/§7.1: the trace is flattened row-major into Fp2
 //! evaluations; FRI proves the evaluation polynomial has low degree.
 //! Constraint verification at query points is the verifier's job
 //! (implemented per-gadget in F2+).
@@ -120,7 +120,7 @@ test "queryToRowCol maps correctly" {
 // checks constraints (running-sum, dequant ranges) at query points.
 // The current flatten-and-FRI wrapper only proves low-degree of the
 // flattened trace; real GEMM witness is NOT low-degree, so FRI rejects.
-// See BLUE_PRINT §5.2 (v1 monolithic AIR) and §11 (F2 milestone).
+// See docs/BLUE_PRINT.md §5.2 (v1 monolithic AIR) and §11 (F2 milestone).
 
 test "FRI direct: prove and verify simple polynomial" {
     const t = std.testing;

@@ -1,6 +1,6 @@
 //! Routing gadgets — top-k and group-top2 selection for MoE layers.
 //!
-//! BLUE_PRINT §7.1: DeepSeek-V3 uses group-top2 among 256 experts; the
+//! docs/BLUE_PRINT.md §7.1: DeepSeek-V3 uses group-top2 among 256 experts; the
 //! selection logic is proven as binary comparisons (LogUp range proofs
 //! on the gate scores).
 

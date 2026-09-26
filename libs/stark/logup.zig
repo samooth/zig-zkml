@@ -1,4 +1,4 @@
-//! LogUp: the lookup argument (BLUE_PRINT §7.4).
+//! LogUp: the lookup argument (docs/BLUE_PRINT.md §7.4).
 //!
 //! Everything else in libs/stark is a sum of products, which cannot state
 //! "this value is in that set". LogUp can, and it fits this backend

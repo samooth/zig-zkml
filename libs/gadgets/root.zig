@@ -4,7 +4,7 @@
 //! that the L3 compiler instantiates into a full AirGraph. The witness
 //! comes from the native kernel's recorded trace (§3 dual-path).
 //!
-//! Layout (BLUE_PRINT §7.1):
+//! Layout (docs/BLUE_PRINT.md §7.1):
 //!   gemm/      — matrix multiply (AIR chunk-16, v1)
 //!   quant/     — dequant/requant, fp8/mxfp8 reencode, GGML scales
 //!   nonlin/    — SiLU/GELU/softmax-step lookups (LogUp)

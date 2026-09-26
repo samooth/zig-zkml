@@ -1,6 +1,6 @@
 //! Weights attestation — F0 Merkle root over model tensors.
 //!
-//! BLUE_PRINT §5.3: `loadWeights` hashes every tensor into a leaf and the
+//! docs/BLUE_PRINT.md §5.3: `loadWeights` hashes every tensor into a leaf and the
 //! root is exposed as `zkml_attestor_root`. This module wraps the
 //! Blake3 Merkle tree from `libs/merkle.zig` with an API oriented toward
 //! model weight loading.
@@ -45,7 +45,7 @@ pub const WeightsAttestor = struct {
     }
 
     /// Inclusion proof for a specific tensor. Free with `freeProof` —
-    /// the allocator is captured here (BLUE_PRINT B1: no orphaned memory).
+    /// the allocator is captured here (docs/BLUE_PRINT.md B1: no orphaned memory).
     pub fn proof(self: *const WeightsAttestor, name: []const u8) !merkle.Proof {
         return self.tree.proof(self.allocator, name);
     }

@@ -1,6 +1,6 @@
 //! Fiat-Shamir transcript — Blake3-based, domain-separated.
 //!
-//! F1 deterministic sampling (BLUE_PRINT §6.2): absorbs serialized data in
+//! F1 deterministic sampling (docs/BLUE_PRINT.md §6.2): absorbs serialized data in
 //! canonical order and squeezes challenges. The transcript is initialized
 //! with a domain separator derived from the statement so that different
 //! statements produce independent challenge streams.

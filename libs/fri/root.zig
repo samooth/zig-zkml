@@ -1,6 +1,6 @@
 //! Canonical FRI over Goldilocks F_{p^2} — the zk-zkml L1 low-degree test.
 //!
-//! Post-spike decision (BLUE_PRINT §12): zig-algebra's index-pairing FRI
+//! Post-spike decision (docs/BLUE_PRINT.md §12): zig-algebra's index-pairing FRI
 //! accepts arbitrary data (no RS structure, no degree semantics) — we
 //! build a proper one instead, following the Plonky3/Stone design:
 //!

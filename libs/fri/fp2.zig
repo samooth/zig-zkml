@@ -1,6 +1,6 @@
 //! F_{p^2} = F_p[i] with i^2 = -1, over Goldilocks p = 2^61 - 1.
 //!
-//! BLUE_PRINT §4/§12 (post-spikes): the FRI domain lives in F_{p^2}:
+//! docs/BLUE_PRINT.md §4/§12 (post-spikes): the FRI domain lives in F_{p^2}:
 //!   - p ≡ 3 (mod 4) => -1 is a quadratic non-residue => F_{p^2} = F_p[i]
 //!   - the norm-1 torus has order p + 1 = 2^61 (a pure power of two):
 //!     a 2-adic multiplicative subgroup closed under negation, with

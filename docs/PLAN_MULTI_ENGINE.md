@@ -230,7 +230,7 @@ build test` (81/81), `abi`, `fmt` y `llama-adapter` siguen verdes.
 ### Stage 4 — ktransformers-zig reference adapter — ✅ DONE
 
 **Layout:** `adapters/ktransformers/` — el glue `kt_*` → `zkml_*` que
-`zkML.md` ya esbozaba, pero llama al contrato genérico
+El diseño inicial ya esbozaba esto, pero llama al contrato genérico
 (`zkml_engine.h`) como todos los demás.
 
 **Implementado:** `libkt_zkml_glue.so` compilado contra el `kt_kernel.h` del
@@ -248,10 +248,10 @@ Gate `zig build kt-adapter` con 9 checks + cross-check del auditor.
 | `adapters/ktransformers/README.md` | Tabla de mapeo `kt_*` → `zkml_*` + los huecos documentados |
 | `build.zig` | Paso `kt-adapter` (CMake + test + `verify_adapter_root.py`) |
 
-**Hallazgos que corrigieron el plan (los `kt_*` de `zkML.md` nunca se implementaron):**
+**Hallazgos que corrigieron el plan (los símbolos `kt_*` nunca se implementaron):**
 
 1. **`kt_weights_merkle_root` / `kt_mla_weights_merkle_root` no existen** —
-   sólo están propuestos en `zkML.md`. El glue los provee con prefijo
+   sólo están propuestos, nunca implementados. El glue los provee con prefijo
    `kt_zkml_` (no reclama esos nombres: si el engine los implementa un día,
    dos `.so` con el mismo símbolo harían ambiguo el binder).
 2. **Los handles `KT_MOE`/`KT_MLA` son opacos y no hay getter de pesos ni

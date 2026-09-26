@@ -1,6 +1,6 @@
 //! Trace recorder — captures witness data from native inference kernels.
 //!
-//! BLUE_PRINT §6.2: the TraceRecorder is multi-threaded (MoE engines
+//! docs/BLUE_PRINT.md §6.2: the TraceRecorder is multi-threaded (MoE engines
 //! run experts in parallel). Recording is by slot (layer, op, expert,
 //! tp_rank) with per-slot buffers. `finalize()` absorbs in CANONICAL order
 //! so the Fiat-Shamir transcript is deterministic regardless of thread
@@ -261,6 +261,6 @@ test "trace multi-thread determinism (§13: mismo witness multi-thread)" {
     const h_st = try rec_st.finalize(&stmt);
 
     // Same witness from multi-threaded execution → same transcript hash
-    // (BLUE_PRINT §13 determinism requirement).
+    // (docs/BLUE_PRINT.md §13 determinism requirement).
     try t.expectEqualSlices(u8, &h_mt, &h_st);
 }

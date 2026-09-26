@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 verify_weights.py — independent auditor for zig-zkml weights attestation
-(BLUE_PRINT F0: "verify_weights.py").
+(docs/BLUE_PRINT.md F0: "verify_weights.py").
 
 This tool deliberately shares NO code with the Zig implementation: it
 re-implements the leaf/node hashing and the proof wire format from the
