@@ -319,8 +319,13 @@ pub fn build(b: *std.Build) void {
     llama_step.dependOn(&llama_py.step);
 
     // Fmt check.
+    //
+    // `bench` was missing from these paths, which is how
+    // bench/fingerprint_bench.zig reached the remote unformatted while every
+    // local gate reported success: the local fmt step never looked at it. A
+    // path that the gate does not cover is a path where nothing is checked.
     const fmt = b.addFmt(.{
-        .paths = &.{ "zkml.zig", "libs", "tools", "adapters" },
+        .paths = &.{ "zkml.zig", "libs", "tools", "adapters", "bench", "build.zig" },
         .check = true,
     });
     const fmt_step = b.step("fmt", "Check formatting");
