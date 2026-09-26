@@ -94,6 +94,7 @@ test {
     _ = @import("libs/stark/float_air_test.zig");
     _ = @import("libs/stark/routing_air.zig");
     _ = @import("libs/stark/routing_test.zig");
+    _ = @import("libs/stark/fingerprint.zig");
     _ = @import("libs/stark/gemm_air.zig");
     _ = @import("libs/stark/gemm_chunk.zig");
     _ = @import("libs/stark/chunk_binding.zig");
