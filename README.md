@@ -18,7 +18,7 @@ engine's native kernels as the witness generator.
 |---|---|
 | **Landed** | 4 engine adapters (Stages 0–4) · weights attestation + independent Python auditor · witness ABI v2 · STARK backend (FRI, column commitments, quotient) · GEMM AIR with operand binding, fp16 scale provenance and 16-MAC chunking · bit-exact float multiply for 4 formats |
 | **Next** | real-engine witness → per-format weight layer → fingerprint/sumcheck |
-| **Gates** | `zig build verify` — 228 tests (217 core + 15 vLLM), C ABI, independent Python audit |
+| **Gates** | `zig build verify` — 236 tests (221 core + 15 vLLM), C ABI, independent Python audit |
 
 The plan was **reordered by what was measured** — the sumcheck prover became
 the critical path, and the weight layer and the witness source became F2/F3
@@ -158,7 +158,7 @@ re-derives the root from the manifest and verifies the proof bytes.
 | **Witness ABI v2** | `zkml_witness_*` session / record / finalize | done (`ZKML_ABI_VERSION = 2`) | determinism test green |
 | **F2** | STARK backend + GEMM AIR | backend done, see [below](#f2-stark-backend) | backend negatives green |
 | **F3** | `zkml_prove_layer` / `zkml_verify_layer` for one layer | pending | proof < 1 MB, verify < 100 ms, ±1 ulp rejected |
-| **F4** | Multi-block recursion over the fingerprint statement | pending; **sumcheck promoted to the critical path** | product decision |
+| **F4** | Multi-block recursion over the fingerprint statement | **arithmetic core done** (`libs/stark/fingerprint.zig`, verified against an oracle); AIR, transcript commitment order and tile aggregation pending. **Sumcheck is the critical path** | product decision |
 
 ## F2 — STARK backend
 
@@ -202,12 +202,14 @@ Not estimated — measured with `zig build bench`:
 | Operation | Cost |
 |---|---|
 | Weights attestation | ~1× load time |
-| Proving one output element, 2048-deep reduction | 236 µs/MAC (1 MAC per row) · 83 µs/MAC (16 MACs per chunk) |
-| One 2048×1408 tile, per-element STARK | ~16 days (2.9M output elements × 0.48 s each) |
+| Proving one output element, 2048-deep reduction | 338 µs/MAC (1 MAC per row) · 142 µs/MAC (16 MACs per chunk), best of 3 |
+| One 2048×1408 layer, per-element STARK | 23 days (1 MAC/row) · 10 days (16 MACs/chunk) — derived from the µs/MAC above × 2.88M MACs × 2048 rows |
 | Bit-exact float multiply | 158–394 composed constraints per operation, by format |
 
-The chunked layout is the better one: 16× fewer trace rows, a 5× smaller proof
-and ~3× less proving time, at the cost of slower verification. The
+The chunked layout is the better one: 16× fewer trace rows and ~2.6× less
+proving time, at the cost of ~2.9× slower verification and a 2.6× *larger*
+proof. Absolute µs/MAC move with machine load — re-run `zig build bench` and
+take the ratios, not the absolute numbers, as the stable claim. The
 per-element STARK is a **reference implementation, not a product path** — the
 fingerprint statement is what changes that, at O(m+n) instead of O(mnk), which
 is why the sumcheck prover sits on the critical path. A full model is **not
