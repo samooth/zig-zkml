@@ -51,6 +51,23 @@ jobs:
           zig version
           python3 --version
 
+      # The auditor implements BLAKE3 against the PyPI package while the
+      # library uses std.crypto.hash.Blake3, so a genuine disagreement between
+      # the two implementations is what the audit is for. That makes the
+      # package a hard requirement, not an optional extra: without it the
+      # auditor exits 2 and `zig build verify` fails.
+      #
+      # Pinned so a new PyPI release cannot silently change the auditor. The
+      # three attempts cover the runner images that mark the system
+      # interpreter as externally managed (PEP 668); the import check below
+      # fails the step loudly if none of them worked.
+      - name: Python audit dependency
+        run: |
+          python3 -m pip install --disable-pip-version-check blake3==1.0.9 \
+            || python3 -m pip install --disable-pip-version-check --break-system-packages blake3==1.0.9 \
+            || python3 -m pip install --disable-pip-version-check --user blake3==1.0.9
+          python3 -c "import blake3; print('blake3', blake3.__version__)"
+
       - name: Formatting
         run: zig build fmt
 
