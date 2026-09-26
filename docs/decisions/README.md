@@ -12,6 +12,7 @@ explica **por qué** es como es, no **qué** es.
 |---|---|---|
 | [ADR-0001](ADR-0001-zkml-vs-blueprint.md) | Abandonar el diseño de zkML.md en favor del contrato de aritmética exacta | aceptado |
 | [ADR-0002](ADR-0002-fingerprint-rank-one.md) | El reto del fingerprint debe ser de rango 1 (`u⊗v`), no una matriz densa | aceptado |
+| [ADR-0003](ADR-0003-nonlinearity-tables.md) | Las tablas de no-linealidad son la especificación, y se atan por hash en la statement | aceptado |
 
 ## Plantilla
 

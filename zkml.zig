@@ -58,7 +58,8 @@ comptime {
     _ = &api.zkml_witness_record_op;
     _ = &api.zkml_witness_finalize;
     _ = &gadgets.gemm.GemmGadget.airFragment;
-    _ = &gadgets.nonlin.SiLULookup.airFragment;
+    _ = &gadgets.nonlin.SiLULookup.siluFragment;
+    _ = &gadgets.nonlin.SiLULookup.geluFragment;
     _ = &gadgets.norm.RmsNormGadget.airFragment;
     _ = &gadgets.routing.GroupTop2Gadget.airFragment;
     _ = &compile.CircuitGraph.init;

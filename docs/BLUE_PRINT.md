@@ -235,11 +235,26 @@ Nunca constraints polinomiales de alto grado.
 > universalidad es alcanzable, pero por *emulación* de la semántica del
 > engine, no por tabla.
 >
-> Consecuencia de diseño: **el statement debe fijar la implementación**
-> (engine + versión + variante de kernel). La universalidad entre modelos
-> se consigue; entre implementaciones de engine no, y no es una limitación
-> del prover sino un hecho sobre lo que es un motor. Ver la decisión de
-> arquitectura resumida al principio de §11.
+> **Resuelto en [ADR-0003](decisions/ADR-0003-nonlinearity-tables.md).**
+> La conclusión anterior —fijar engine + versión + variante de kernel— es
+> inviable y se descartó: `ggml_vec_silu_f32` reparte entre **seis**
+> implementaciones de `ggml_v_silu`, cada una con su propia aproximación
+> polinómica de `expf`, y el resultado difiere en el último bit según la CPU.
+> Un witness grabado en AVX2 no verifica contra un AIR de AVX512, así que atar
+> la variante vuelve el repositorio un producto por máquina.
+>
+> Lo que se hace en su lugar: **la tabla canónica es la especificación**, y su
+> digest Blake3 es public input de la statement (que sube a `version = 2`). El
+> kernel en modo recorded ejecuta esa misma tabla, no la del engine — el
+> contrato dual-path de §3.1, que §4.5 convertía en intención y ADR-0003
+> vuelve real. Un prover con otra tabla está afirmando otra statement.
+>
+> Consecuencia: la universalidad es **entre modelos y entre kernels
+> recorded**, no entre implementaciones de engine. El fast path nativo de cada
+> motor queda sin verificar por construcción, y ahora está documentado como
+> tal en vez de insinuado. `libs/gadgets/norm/root.zig` sigue sin construirse
+> —sus stubs anteriores emitían una constraint sin expresión— y ahora falla a
+> compilar con los requisitos escritos en su cabecera.
 
 ## 5. Composición de proofs y commitments
 
