@@ -90,5 +90,15 @@ jobs:
         run: |
           # A build step that silently runs zero tests would still be
           # green, so the count is asserted rather than trusted.
+          #
+          # The floor was 1, which accepted a suite of nine. It is now the
+          # real count, for the reason §0 of the internal plan gives for every
+          # other number in this repository: a figure nobody checks drifts, and
+          # a floor is not a figure. When a test is added, this fails until the
+          # number here moves with it — which is the point, and the same rule
+          # that already covers the benchmark costs.
+          #
+          # 250 core + 11 zig-ai, checked by `zig build test --summary all`
+          # on the release toolchain this workflow installs.
           zig build test --summary all 2>&1 | tee /tmp/summary.txt
-          grep -Eq '[1-9][0-9]* tests? passed' /tmp/summary.txt
+          grep -Eq '^Build Summary: [0-9]+/[0-9]+ steps succeeded; 261/261 tests passed$' /tmp/summary.txt

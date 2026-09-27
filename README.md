@@ -6,19 +6,38 @@
 
 Verifiable-inference (zkML) layer for host inference engines — **llama.cpp,
 vLLM, zig-ai, ktransformers-zig** — via per-engine adapters: prove that a
-layer's output was produced by the committed model weights, using the
-engine's native kernels as the witness generator.
+layer's output was produced by the committed model weights.
 
-> **Design principle: native inference is the witness generator.** MoE kernels
-> (`gemmExpert`, routing, SwiGLU) run at native speed and record their trace;
-> the STARK prover only interpolates the trace and runs FRI. The model is never
-> executed *inside* the circuit.
+> **Design principle: the QuantScheme is normative, and the kernel runs its
+> arithmetic in recorded mode.** The statement defines the exact arithmetic the
+> proof verifies, and the kernel runs *that* — not the engine's native kernel.
+> The reason is arithmetic, not taste: the native fast path accumulates in
+> FP32/BF16 with rounding at every step while field arithmetic is exact, so a
+> witness taken from the fast path does not satisfy the constraints. There is
+> no approximation here to tune; the dual path is what makes the proof about
+> the thing the model actually computed.
+>
+> This has two halves, and it is worth keeping them apart:
+>
+> - **F0/F1 (shipped):** the native kernels *are* the product. Each adapter
+>   reads weights, hashes them and publishes a root. There is no circuit yet.
+> - **F2+:** the dual path above applies, and the engine's native path is
+>   **not verifiable by construction** — `ggml_vec_silu_f32` alone dispatches to
+>   six `expf` approximations that differ in the last bit, so a witness
+>   recorded on one CPU is not one the same proof would accept on another.
+>   Universality is across models and across *recorded* kernels, not across
+>   engine implementations.
+>
+> See [ADR-0001](docs/decisions/ADR-0001-zkml-vs-blueprint.md) decision 1 for
+> the arithmetic argument and [ADR-0003](docs/decisions/ADR-0003-nonlinearity-tables.md)
+> for the engine-variance measurement. This is the constraint that shapes the
+> F3 and F4 decisions, so it is stated here rather than deferred.
 
 | | |
 |---|---|
 | **Landed** | 4 engine adapters (Stages 0–4) · weights attestation + independent Python auditor · witness ABI v2 · STARK backend (FRI, column commitments, quotient) · GEMM AIR with operand binding, fp16 scale provenance and 16-MAC chunking · bit-exact float multiply for 4 formats |
 | **Next** | real-engine witness → per-format weight layer → fingerprint/sumcheck |
-| **Gates** | `zig build verify` — 245 tests (230 core + 15 vLLM), C ABI, independent Python audit |
+| **Gates** | `zig build verify` — 261 tests (250 core + 11 zig-ai), C ABI, independent Python audit |
 
 The plan was **reordered by what was measured** — the sumcheck prover became
 the critical path, and the weight layer and the witness source became F2/F3
@@ -65,8 +84,10 @@ Key design decisions, with full rationale in [docs/BLUE_PRINT.md](docs/BLUE_PRIN
   deferred to F4+.
 - **GEMM as a monolithic AIR in v1** (16-MAC chunked running sums);
   fingerprint sumcheck (zkLLM-style) is the v2 optimisation.
-- **Weights as committed AIR columns**, bound to the F0 Merkle root through an
-  in-trace Poseidon2 hash column.
+- **Weights as committed AIR columns** — *F3, not built.* Binding a trace
+  column to the F0 Merkle leaf still needs a hash field inside the trace; the
+  choice (Poseidon2 or reusing the F0 Blake3 leaf) is open and belongs with
+  the F3 layer proof.
 
 ## Architecture
 
@@ -76,14 +97,25 @@ L4  C API                   zkml_* — attest / prove / verify, witness ABI v2
 L3  Model compiler          CircuitGraph → AirGraph
 L2  zkML gadgets      ◄     QuantTensor, gemm, quant/dequant, swiglu,
     (this repo)             routing, lookups (LogUp)
-L1  Proof systems           STARK + FRI, AIR, transcript, sumcheck, recursion
-    (zig-zk)
-L0  Algebra                 Goldilocks, hash, merkle, NTT
-    (zig-algebra)
+L1  Proof systems           STARK + FRI, AIR, transcript
+    (this repo)             libs/stark/, libs/fri/ — own, not upstream
+L0  Algebra                 Goldilocks (own), merkle, hash
+    (mixed)                 zig-merkle from zig-algebra
 ```
 
-The L0–L2 layers are implemented in `libs/`; L1 and L0 come from `zig-zk` and
-`zig-algebra`.
+Everything from L1 up is implemented in this repository. The only thing
+borrowed from `zig-algebra` is `zig-merkle`, the Merkle tree used for column
+commitments in exactly two places (`libs/stark/commit.zig`,
+`libs/fri/root.zig`). `zig-zk` is not consumed.
+
+**Why the FRI is our own.** The norm-1 torus of F_{p²} has order `p + 1`, and
+a clean 2-adic subgroup — the one the degree test needs — requires `p + 1` to
+be *exactly* a power of two. Our Goldilocks is `p = 2⁶¹ − 1`, so `p + 1 = 2⁶¹`
+and the torus order is a pure power of two, which also makes halving exact
+(`1/x` on the torus is the conjugate). Upstream's Goldilocks is
+`p = 2⁶⁴ − 2³² + 1`, where `p + 1 = 2·(odd)` and no such subgroup exists. That
+is the reason for the fork, and it is a property of the field rather than of
+any particular FRI implementation.
 
 ### Layout
 
