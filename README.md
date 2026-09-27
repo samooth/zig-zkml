@@ -19,7 +19,7 @@ layer's output was produced by the committed model weights.
 | | |
 |---|---|
 | **Landed** | 4 engine adapters (Stages 0–4) · weights attestation + independent Python auditor · witness ABI v2 · STARK backend (FRI, column commitments, quotient) · GEMM AIR with operand binding, fp16 scale provenance and 16-MAC chunking · bit-exact float multiply for 4 formats |
-| **Next** | real-engine witness → per-format weight layer → fingerprint/sumcheck |
+| **Next** | real-engine witness → per-format weight layer → FRI over the fingerprint AIR (the rank-1 arithmetic and its commitment order are done and measured; see [F2](README.md#f2--stark-backend)) → sumcheck, contributed upstream to `zig-algebra` |
 | **Gates** | `zig build verify` — the test suite, C ABI, independent Python audit. The count is read from the CI log, not from here: this README is a living document and a number here is a photograph that rots |
 
 The plan was **reordered by what was measured** — the sumcheck prover became
@@ -214,8 +214,18 @@ has the arithmetic argument for the dual path.
 - **Also** — a compiled routing AIR proving the selected set *is* the top-k,
   a LogUp core, and a tested barrel-shifter gadget.
 
-Still pending: the real-engine witness, the per-format weight layer, and fp32
-accumulation.
+Still pending: the real-engine witness, the per-format weight layer, FRI over
+the fingerprint AIR, fp32 accumulation, and sumcheck — the last one contributed
+upstream to `zig-algebra` rather than implemented here.
+
+**The fingerprint is arithmetic and a commitment order, not a proof.** What is
+measured: a rank-1 `u ⊗ v` challenge, an identity, an oracle check, and a
+commitment order that binds `u` and `v` *after* their roots, rejects an all-zero
+challenge, and separates the two domains. `zig build bench-fingerprint` puts it
+at ~36× / ~168× / ~309× the oracle for 36 / 168 / 309 columns, and ~834× on a
+`2048×1408×2048` matmul. What is *not* measured: there is no AIR for it, no
+FRI over it, and no tile aggregation. A fingerprint nobody can prove is a
+hash, so the row that matters is the next one, not this paragraph.
 
 Every negative is a gate: tampered trace, opening, quotient and root are
 rejected, a random trace is refused, every rounding witness of every format is
