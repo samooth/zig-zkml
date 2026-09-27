@@ -66,7 +66,10 @@ pub fn main() !void {
     const allocator = debug_allocator.allocator();
 
     const n = 256;
-    const domain = fri.Domain(Field).init(Field, 8);
+    // 0.5.1: init devuelve error union. Antes era un assert, que en
+    // ReleaseFast desaparecia y dejaba underflow de dos_adicity - log_n.
+    // Aqui el error es explicito y el llamante lo ve.
+    const domain = try fri.Domain(Field).init(Field, 8);
     const config = fri.Config{
         .log_domain = 8,
         .log_initial_degree = 7,
