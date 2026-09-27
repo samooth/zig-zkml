@@ -365,7 +365,14 @@ pub fn expected_constraints(comptime f: Format) usize {
 }
 
 /// Build the fp16 multiply AIR. `rows` multiplies, one per row.
-pub const BuildError = bld.BuildError || error{BadWidth};
+pub const BuildError = bld.BuildError || error{
+    BadWidth,
+    /// Zero rows. This was a pre-condition assertion, which ReleaseFast
+    /// removes: a caller asking for an empty AIR got an empty system and no
+    /// diagnostic at all. The contract is in the type now, and
+    /// docs/asserts.md records the closure.
+    EmptyRows,
+};
 
 pub fn buildSystem(allocator: std.mem.Allocator, rows: usize, comptime f: Format) BuildError!bld.Owned {
     const L = Layout(f);
@@ -376,7 +383,7 @@ pub fn buildSystem(allocator: std.mem.Allocator, rows: usize, comptime f: Format
     const nm_norm = comptime cname("norm = product bit {d}", .{f.normBit()});
     const nm_round = comptime cname("round = mux(norm, p{d}, p{d})", .{ f.keptHigh() - 1, f.keptHigh() - 2 });
     const nm_exp = comptime cname("ec = ea + eb + {d} + norm + carry − {d}", .{ f.keptLow(), @as(u16, f.bias) + @as(u16, f.mant_bits) - @as(u16, f.keptLow()) });
-    std.debug.assert(rows > 0);
+    if (rows == 0) return BuildError.EmptyRows;
     var b = Builder{ .allocator = allocator };
     errdefer {
         b.factors.deinit(allocator);
@@ -1090,6 +1097,9 @@ fn stickyOr(b: *Builder, sum_col: u16, inv_col: u16, out_col: u16, base: u16, co
 
 pub const BuildTraceError = error{
     OutOfMemory,
+    /// No pairs to build a trace from. Was an assert, so in ReleaseFast a
+    /// zero-length call produced an empty trace with no diagnostic.
+    EmptyRows,
     /// The reference refused this pair (subnormal input or result, or an
     /// inf/NaN result). S1 does not cover those and says so instead of
     /// proving something plausible but wrong.
@@ -1214,7 +1224,7 @@ pub fn buildTraceShifted(
 ) BuildTraceError!Trace {
     const L = Layout(f);
     const rows = pairs.len;
-    std.debug.assert(rows > 0);
+    if (rows == 0) return BuildTraceError.EmptyRows;
 
     var trace = try Trace.alloc(allocator, L.column_count, rows);
     errdefer trace.deinit(allocator);

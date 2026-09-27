@@ -72,7 +72,7 @@ pub const Term = expr.Term;
 pub const Factor = expr.Factor;
 pub const Goldilocks = tensor.Goldilocks;
 
-pub const BuildError = error{ OutOfMemory, BadWidth, InvalidReductionLength };
+pub const BuildError = error{ OutOfMemory, BadWidth, InvalidReductionLength } || air_builder.BuildError;
 
 pub const BindError = error{
     OutOfMemory,

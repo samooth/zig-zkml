@@ -98,6 +98,7 @@ test {
     _ = @import("libs/stark/routing_air.zig");
     _ = @import("libs/stark/routing_test.zig");
     _ = @import("libs/stark/assert_ledger_test.zig");
+    _ = @import("libs/stark/caller_guard_test.zig");
     _ = @import("libs/stark/rmsnorm_ref.zig");
     _ = @import("libs/stark/fingerprint.zig");
     _ = @import("libs/stark/fingerprint_bind.zig");

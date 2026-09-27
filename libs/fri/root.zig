@@ -111,6 +111,13 @@ pub const Error = error{
     OutOfMemory,
     InvalidParameters,
     InvalidProof,
+    /// From `Domain.init` when `log_n` exceeds the torus order. It is a
+    /// distinct name from `InvalidParameters` on purpose: `Config.validate`
+    /// already rejects an oversized `log_domain` as `InvalidParameters`, so
+    /// merging the two would leave a guard in the type whose name promises
+    /// less than it delivers. The same condition, seen on a second path,
+    /// gets the name that path produces.
+    DomainTooLarge,
 };
 
 /// Resource bound on the final FRI domain, i.e. on the scratch buffer the
@@ -226,7 +233,7 @@ pub fn prove(
         // NATURAL layout): even = (f(x)+f(-x))/2, odd = (f(x)-f(-x))/(2x)
         // with 1/x = conj(x) on the norm-1 torus, and the child lands at
         // position j of the half-size natural domain (x^2 = g_{k-1}^j).
-        const dom_cur = Domain.init(@intCast(log_cur));
+        const dom_cur = try Domain.init(@intCast(log_cur));
         const next = try allocator.alloc(Fp2, half);
         for (0..half) |j| {
             const x = dom_cur.at(j); // position j holds x; j + half holds -x
@@ -312,7 +319,7 @@ const halves_inv = (fp2.Goldilocks.p + 1) / 2;
 /// prover already uses for its LDE, so the two can no longer disagree
 /// about layout conventions.
 fn interpolateToCoeffs(allocator: std.mem.Allocator, values: []const Fp2, log_final: u6) Error![]Fp2 {
-    const dom = Domain.init(log_final);
+    const dom = try Domain.init(log_final);
     const coeffs = try allocator.dupe(Fp2, values);
     errdefer allocator.free(coeffs);
     fft.toCoefficients(coeffs, dom) catch return Error.InvalidParameters;
@@ -429,7 +436,7 @@ pub fn verify(
     // the config is the verifier's own, never prover-supplied.
     const final_domain_size: usize = @as(usize, 1) << proof.log_final;
     if (final_domain_size > max_final_domain) return Error.InvalidProof;
-    const dom_final = Domain.init(proof.log_final);
+    const dom_final = try Domain.init(proof.log_final);
     const scratch = std.heap.page_allocator.alloc(Fp2, final_domain_size) catch
         return Error.OutOfMemory;
     defer std.heap.page_allocator.free(scratch);
@@ -466,7 +473,7 @@ pub fn verify(
                 // position j (natural layout). The next round's pair
                 // (j', j'+half') contains that child at slot
                 // 0 if j < half' else 1.
-                const dom_r = Domain.init(@intCast(config.log_domain - @as(u6, @intCast(r))));
+                const dom_r = try Domain.init(@intCast(config.log_domain - @as(u6, @intCast(r))));
                 const xv = dom_r.at(j);
                 const even = x.add(negx).mulReal(halves_inv_g);
                 const odd = x.sub(negx).mul(xv.conj()).mulReal(halves_inv_g);
@@ -478,7 +485,7 @@ pub fn verify(
             } else {
                 // Last round: the pair folds into the final domain
                 // position `j` (x^2 = g_f^j under natural layout).
-                const dom_r = Domain.init(@intCast(config.log_domain - @as(u6, @intCast(r))));
+                const dom_r = try Domain.init(@intCast(config.log_domain - @as(u6, @intCast(r))));
                 const xv = dom_r.at(j);
                 const even = x.add(negx).mulReal(halves_inv_g);
                 const odd = x.sub(negx).mul(xv.conj()).mulReal(halves_inv_g);
@@ -508,7 +515,7 @@ fn testConfig(log_n: u6, log_f: u6, queries: usize) Config {
 test "fri: degree-2 poly on the domain verifies" {
     const a = testing.allocator;
     const log_n: u6 = 8; // 256
-    const dom = Domain.init(log_n);
+    const dom = try Domain.init(log_n);
     const n = dom.size();
     var evals = try a.alloc(Fp2, n);
     defer a.free(evals);
@@ -528,7 +535,7 @@ test "fri: degree-2 poly on the domain verifies" {
 test "fri: RANDOM data must be rejected (the zig-algebra failure mode)" {
     const a = testing.allocator;
     const log_n: u6 = 8;
-    const dom = Domain.init(log_n);
+    const dom = try Domain.init(log_n);
     const n = dom.size();
     var evals = try a.alloc(Fp2, n);
     defer a.free(evals);
@@ -554,7 +561,7 @@ test "fri: RANDOM data must be rejected (the zig-algebra failure mode)" {
 test "fri: degree-128 poly (>> final 8) must be rejected" {
     const a = testing.allocator;
     const log_n: u6 = 8;
-    const dom = Domain.init(log_n);
+    const dom = try Domain.init(log_n);
     const n = dom.size();
     var evals = try a.alloc(Fp2, n);
     defer a.free(evals);
@@ -587,7 +594,7 @@ test "fri: degree-128 poly (>> final 8) must be rejected" {
 test "fri: interpolateToCoeffs recovers a degree-1 polynomial" {
     const a = testing.allocator;
     const log_f: u6 = 6;
-    const dom = Domain.init(log_f);
+    const dom = try Domain.init(log_f);
     const m = dom.size();
     var values = try a.alloc(Fp2, m);
     defer a.free(values);

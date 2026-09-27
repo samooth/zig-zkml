@@ -84,7 +84,7 @@ pub const decompose = float_ref.decompose;
 /// (all 65536 values of `1.0 · x`, 20000 random pairs, the RNE tie cases)
 /// are now the regression suite for the generic code that serves bfloat16
 /// and both fp8 variants too.
-pub const MultiplyError = error{OutOfRange};
+pub const MultiplyError = float_ref.Error;
 
 pub fn multiply(a: u16, b: u16) MultiplyError!u16 {
     return float_ref.multiply(format, a, b);
@@ -136,31 +136,31 @@ test "fp16 ref: 2.0 times 1.5 is 3.0" {
 test "fp16 ref: round-to-nearest-even on a tie" {
     // A tie is exactly half of the last kept bit: value = kept·2^11 + 2^10,
     // with NOTHING below the round bit. With kept EVEN, RNE stays put.
-    const r = roundToNearestEven((@as(u64, 2) << 11) | (1 << 10), 11);
+    const r = try roundToNearestEven((@as(u64, 2) << 11) | (1 << 10), 11);
     try testing.expectEqual(@as(u32, 2), r.kept);
     try testing.expectEqual(@as(u1, 1), r.round_bit);
     try testing.expectEqual(@as(u1, 0), r.sticky);
 
     // The same tie with an ODD kept value rounds up.
-    const r2 = roundToNearestEven((@as(u64, 3) << 11) | (1 << 10), 11);
+    const r2 = try roundToNearestEven((@as(u64, 3) << 11) | (1 << 10), 11);
     try testing.expectEqual(@as(u32, 4), r2.kept);
     try testing.expectEqual(@as(u1, 1), r2.round_bit);
     try testing.expectEqual(@as(u1, 0), r2.sticky);
 
     // Anything below the round bit sets sticky, which forces the round up
     // even when the kept value is even.
-    const r3 = roundToNearestEven((@as(u64, 2) << 11) | (1 << 10) | 1, 11);
+    const r3 = try roundToNearestEven((@as(u64, 2) << 11) | (1 << 10) | 1, 11);
     try testing.expectEqual(@as(u32, 3), r3.kept);
     try testing.expectEqual(@as(u1, 1), r3.round_bit);
     try testing.expectEqual(@as(u1, 1), r3.sticky);
 
     // A carry out of the top bit: kept lands one past the field.
-    const r4 = roundToNearestEven((@as(u64, 0x7FF) << 11) | (1 << 10) | 1, 11);
+    const r4 = try roundToNearestEven((@as(u64, 0x7FF) << 11) | (1 << 10) | 1, 11);
     try testing.expectEqual(@as(u32, 0x800), r4.kept);
     try testing.expectEqual(@as(u1, 1), r4.carry);
 
     // Below half, nothing moves regardless of stickiness.
-    const r5 = roundToNearestEven((@as(u64, 2) << 11) | ((1 << 10) - 1), 11);
+    const r5 = try roundToNearestEven((@as(u64, 2) << 11) | ((1 << 10) - 1), 11);
     try testing.expectEqual(@as(u32, 2), r5.kept);
     try testing.expectEqual(@as(u1, 0), r5.round_bit);
     try testing.expectEqual(@as(u1, 1), r5.sticky);

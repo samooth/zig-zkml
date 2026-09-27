@@ -75,9 +75,17 @@ pub const Domain = struct {
     /// g_k: order-2^log_n generator (H_k = <g_k>).
     step_gen: Fp2,
 
-    pub fn init(log_n: u6) Domain {
+    /// `error.DomainTooLarge` when `log_n` exceeds the torus order. This was a
+    /// pre-condition assertion, and removing it was not a formality: `log_n`
+    /// is a `u6` from the prover config, so a value above 61 makes
+    /// `torus_log_order - log_n` underflow, and in ReleaseFast the
+    /// subtraction wraps and `pow2` returns a generator of the wrong order
+    /// with no diagnostic. `zig_algebra` v0.5.1 hit the same defect in its own
+    /// `Domain.init` and fixed it the same way; this is that fix, kept in
+    /// step with upstream rather than diverged from it.
+    pub fn init(log_n: u6) error{DomainTooLarge}!Domain {
         // log_n = 0 is the trivial subgroup {1} (valid fold target).
-        std.debug.assert(log_n <= torus_log_order);
+        if (log_n > torus_log_order) return error.DomainTooLarge;
         return .{
             .log_n = log_n,
             .step_gen = generator.pow(pow2(torus_log_order - @as(u32, log_n))),
@@ -119,7 +127,7 @@ test "domain: H_k sizes and negation structure" {
     const t = std.testing;
 
     for ([_]u6{ 1, 2, 3, 5, 8 }) |k| {
-        const d = Domain.init(k);
+        const d = try Domain.init(k);
         const n = d.size();
         try t.expect(n == pow2(k));
 
@@ -140,7 +148,7 @@ test "domain: H_k sizes and negation structure" {
         }
 
         // closed under squaring into the half-order domain
-        const d2 = Domain.init(k - 1);
+        const d2 = try Domain.init(k - 1);
         const n2 = d2.size();
         var buf2: [128]Fp2 = undefined;
         d2.fill(buf2[0..n2]);
@@ -161,7 +169,7 @@ test "domain: H_k sizes and negation structure" {
 test "domain: fold pairing halves exactly 2-to-1" {
     const t = std.testing;
     const k: u6 = 6;
-    const d = Domain.init(k);
+    const d = try Domain.init(k);
     const n = d.size();
     var buf: [64]Fp2 = undefined;
     d.fill(&buf);

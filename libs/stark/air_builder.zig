@@ -57,7 +57,13 @@ const CSpec = struct {
     n_terms: usize,
 };
 
-pub const BuildError = error{OutOfMemory};
+pub const BuildError = error{
+    OutOfMemory,
+    /// Zero rows. This was a pre-condition assertion, which ReleaseFast
+    /// removes, so this produced an empty system and no diagnostic at all.
+    /// docs/asserts.md records the closure.
+    EmptyRows,
+};
 
 pub const Builder = struct {
     allocator: std.mem.Allocator,
@@ -197,7 +203,7 @@ pub const Owned = struct {
 /// constraint, one per row. Takes ownership of the builder's buffers; the
 /// builder is left unusable.
 pub fn freeze(allocator: std.mem.Allocator, b: *Builder, rows: usize) BuildError!Owned {
-    std.debug.assert(rows > 0);
+    if (rows == 0) return BuildError.EmptyRows;
     const factor_buf = try b.factors.toOwnedSlice(allocator);
     errdefer allocator.free(factor_buf);
     const term_specs = try b.terms.toOwnedSlice(allocator);
@@ -240,7 +246,7 @@ pub const Trace = struct {
     columns: [][]Fp2,
 
     pub fn alloc(allocator: std.mem.Allocator, column_count: usize, rows: usize) BuildError!Trace {
-        std.debug.assert(rows > 0);
+        if (rows == 0) return BuildError.EmptyRows;
         const cols = try allocator.alloc([]Fp2, column_count);
         errdefer allocator.free(cols);
         var made: usize = 0;

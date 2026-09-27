@@ -64,6 +64,10 @@ pub const System = expr.System;
 pub const Constraint = expr.Constraint;
 pub const Window = expr.Window;
 
+/// `fri.Error` is composed in rather than restated, so a FRI error that
+/// reaches the STARK boundary arrives under its own name instead of being
+/// relabelled `InvalidProof` — which would be a lie, because the proof was
+/// never checked; the parameters were refused before it was built.
 pub const Error = error{
     OutOfMemory,
     InvalidTrace,
@@ -72,7 +76,7 @@ pub const Error = error{
     /// division left a non-zero remainder.
     ConstraintViolation,
     InvalidProof,
-};
+} || fri.Error;
 
 /// Column-major trace: `columns[c][row]`, each of length `rows`.
 pub const Trace = struct {
@@ -223,8 +227,8 @@ fn buildOpening(
 
 /// Interpolate each column through the trace domain and extend to the LDE.
 fn buildLde(allocator: std.mem.Allocator, trace: Trace, config: Config) Error![][]Fp2 {
-    const trace_dom = Domain.init(config.log_trace);
-    const lde_dom = Domain.init(config.logLde());
+    const trace_dom = try Domain.init(config.log_trace);
+    const lde_dom = try Domain.init(config.logLde());
     const lde_n = lde_dom.size();
 
     const out = try allocator.alloc([]Fp2, trace.columns.len);
@@ -341,10 +345,10 @@ fn exemptionFactorAt(
     log_trace: u6,
     n: usize,
     x: Fp2,
-) Fp2 {
+) error{DomainTooLarge}!Fp2 {
     var acc = Fp2.one;
     if (system.transition_exemptions == 0) return acc;
-    const trace_dom = Domain.init(log_trace);
+    const trace_dom = try Domain.init(log_trace);
     for (0..system.transition_exemptions) |i| {
         const row = n - 1 - i;
         acc = acc.mul(x.sub(trace_dom.at(@intCast(row))));
@@ -362,7 +366,7 @@ pub fn prove(
     try trace.validate(system);
     try config.validate(system);
 
-    const lde_dom = Domain.init(config.logLde());
+    const lde_dom = try Domain.init(config.logLde());
     const lde_n = lde_dom.size();
     const n = trace.rows;
     // One trace row = `stride` LDE positions. H_k sits inside H_{k+b} at
@@ -398,7 +402,7 @@ pub fn prove(
     // moves data up, so no row of the LDE is disturbed and the quotient stays
     // inside the committed LDE size.
     if (system.transition_exemptions > 0) {
-        const trace_dom = Domain.init(config.log_trace);
+        const trace_dom = try Domain.init(config.log_trace);
         for (0..system.transition_exemptions) |i| {
             const row = n - 1 - i;
             multiplyByExemptionFactor(p_coeffs, trace_dom.at(@intCast(row)));
@@ -524,7 +528,7 @@ pub fn verify(
     if (proof.commitment.num_columns <= max_col) return Error.InvalidProof;
     const ncols: usize = proof.commitment.num_columns;
 
-    const lde_dom = Domain.init(config.logLde());
+    const lde_dom = try Domain.init(config.logLde());
     const lde_n = lde_dom.size();
     const n = @as(usize, 1) << config.log_trace;
     if (system.trace_rows) |expected| if (n != expected) return Error.InvalidProof;
@@ -567,7 +571,7 @@ pub fn verify(
         const half_lde = lde_n / 2;
         const q_value = q.values[0][if (i < half_lde) 0 else 1];
         const p_value = recompose(opening, system, alphas[0..n_composed]);
-        const e_value = exemptionFactorAt(system, config.log_trace, n, x);
+        const e_value = try exemptionFactorAt(system, config.log_trace, n, x);
         if (!p_value.mul(e_value).eql(q_value.mul(z_h))) return false;
     }
 

@@ -136,7 +136,7 @@ const testing = std.testing;
 test "fft: roundtrip coefficients -> evaluations -> coefficients" {
     const a = testing.allocator;
     for ([_]u6{ 1, 2, 3, 4, 6 }) |log_n| {
-        const dom = Domain.init(log_n);
+        const dom = try Domain.init(log_n);
         const n = dom.size();
         var prng = std.Random.DefaultPrng.init(@as(u64, 0xF17) +% @as(u64, log_n));
 
@@ -157,7 +157,7 @@ test "fft: roundtrip coefficients -> evaluations -> coefficients" {
 test "fft: evaluations match direct evaluation on the domain" {
     const a = testing.allocator;
     const log_n: u6 = 5;
-    const dom = Domain.init(log_n);
+    const dom = try Domain.init(log_n);
     const n = dom.size();
 
     var prng = std.Random.DefaultPrng.init(0xD1FF);
@@ -176,7 +176,7 @@ test "fft: evaluations match direct evaluation on the domain" {
 }
 
 test "fft: conjugate root is the inverse root" {
-    const dom = Domain.init(8);
+    const dom = try Domain.init(8);
     const w = dom.step_gen;
     try testing.expect(w.mul(w.conj()).eql(Fp2.one));
     // The transform's inverse scaling is exact: forward then inverse is

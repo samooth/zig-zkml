@@ -128,7 +128,7 @@ test "FRI direct: prove and verify simple polynomial" {
 
     // Direct FRI test: degree-2 poly on 256-element domain.
     const log_n: u6 = 8;
-    const dom = domain.Domain.init(log_n);
+    const dom = try domain.Domain.init(log_n);
     const n = dom.size();
     var evals = try a.alloc(Fp2, n);
     defer a.free(evals);

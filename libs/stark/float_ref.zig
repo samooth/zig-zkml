@@ -18,7 +18,14 @@ const std = @import("std");
 const fmt_lib = @import("float_format.zig");
 
 pub const Format = fmt_lib.Format;
-pub const Error = error{OutOfRange};
+pub const Error = error{
+    OutOfRange,
+    /// `keep` outside (0, 64). This was a pre-condition assertion, which
+    /// ReleaseFast removes: a keep of 0 shifted by a full word and a keep of
+    /// 64 was an undefined shift, both silently. docs/asserts.md records the
+    /// closure.
+    BadKeep,
+};
 
 /// Round `value` to `keep` low bits, round-to-nearest-even.
 ///
@@ -35,8 +42,12 @@ pub const Rounded = struct {
     carry: u32,
 };
 
-pub fn roundToNearestEven(value: u64, keep: u8) Rounded {
-    std.debug.assert(keep > 0 and keep < 64);
+/// `Error.BadKeep` when `keep` is outside (0, 64). The signature is now
+/// fallible on purpose: a silent `Rounded` for `keep == 0` would shift by a
+/// full word and `keep == 64` would be an undefined shift, and in ReleaseFast
+/// the old assert would have let both through.
+pub fn roundToNearestEven(value: u64, keep: u8) Error!Rounded {
+    if (keep == 0 or keep > 63) return Error.BadKeep;
     const kept = value >> @intCast(keep);
     const sticky_mask = (@as(u64, 1) << @intCast(keep - 1)) - 1;
     const round_bit: u1 = @intCast((value >> @intCast(keep - 1)) & 1);
@@ -127,7 +138,7 @@ pub fn multiply(f: Format, a: u16, b: u16) !u16 {
     std.debug.assert(product >= (implicit * implicit));
     const keep: u8 = if (product >= (implicit << @intCast(f.normBit() - @as(u8, f.mant_bits)))) f.keptHigh() else f.keptLow();
 
-    const r = roundToNearestEven(product, keep);
+    const r = try roundToNearestEven(product, keep);
     var kept = r.kept;
     var carry: u1 = 0;
     if (kept == (implicit << 1)) {
@@ -185,7 +196,7 @@ pub fn multiply(f: Format, a: u16, b: u16) !u16 {
         return packSpecial(f, sign, .zero);
     }
     std.debug.assert(scale >= 1);
-    const reduced = roundToNearestEven(product, @intCast(scale));
+    const reduced = try roundToNearestEven(product, @intCast(scale));
     if (reduced.kept >= implicit) {
         // The rounding carried into the smallest normal.
         return f.pack(.{ .sign = sign, .exponent = 1, .mantissa = 0 });
@@ -414,7 +425,7 @@ test "float ref: every subnormal binary16 result matches one rounding" {
                     if (scale > @as(i32, f.mant_bits) * 2 + 2) {
                         try testing.expectEqual(@as(u16, 0), got);
                     } else {
-                        const one = roundToNearestEven(product, @intCast(scale));
+                        const one = try roundToNearestEven(product, @intCast(scale));
                         const want: u16 = if (one.kept >= f.mantImplicit())
                             f.pack(.{ .sign = 0, .exponent = 1, .mantissa = 0 })
                         else
@@ -523,7 +534,7 @@ test "float ref: multiplication commutes and negates symmetrically" {
 }
 
 test "float ref: roundToNearestEven still behaves" {
-    const r = roundToNearestEven((@as(u64, 2) << 11) | (1 << 10), 11);
+    const r = try roundToNearestEven((@as(u64, 2) << 11) | (1 << 10), 11);
     try testing.expectEqual(@as(u64, 2), r.kept);
     try testing.expectEqual(@as(u1, 1), r.round_bit);
     try testing.expectEqual(@as(u1, 0), r.sticky);

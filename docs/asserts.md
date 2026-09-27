@@ -51,34 +51,28 @@ production code.
 | 4 | `libs/fri/fp2.zig:155` | comptime | invariant | …and real part exactly −1 | no |
 | 5 | `libs/fri/domain.zig:59` | comptime | invariant | `findGenerator`: search hit has norm 1 | no |
 | 6 | `libs/fri/domain.zig:61` | comptime | invariant | …and order 2⁶⁰, i.e. it generates the torus | no |
-| 7 | `libs/fri/domain.zig:80` | api | **caller** | `init(log_n)`: the domain fits the torus | **yes** |
-| 8 | `libs/fri/domain.zig:98` | internal | invariant | `fill`: buffer length matches the domain size | no |
-| 9 | `libs/fri/domain.zig:127` | internal | invariant | `root`: the loop bound stays in range | no |
-| 10 | `libs/stark/root.zig:670` | internal | invariant | `honestTrace`: the transcript accumulator closes back to zero | no |
-| 11 | `libs/stark/air_builder.zig:200` | api | **caller** | `freeze`: at least one row | **yes** |
-| 12 | `libs/stark/air_builder.zig:243` | api | **caller** | `alloc`: at least one row | **yes** |
-| 13 | `libs/stark/barrel.zig:164` | api | invariant | `cfg.amount_bits >= 2` is a compile-time constant, not caller data | no |
-| 14 | `libs/stark/float_air.zig:379` | api | **caller** | `buildSystem`: at least one row | **yes** |
-| 15 | `libs/stark/float_air.zig:1217` | api | **caller** | `buildTraceShifted`: at least one row | **yes** |
-| 16 | `libs/stark/float_ref.zig:39` | api | **caller** | `roundToNearestEven(value, keep)`: `0 < keep < 64` | **yes** |
-| 17 | `libs/stark/float_ref.zig:127` | api | invariant | `multiply`: product is at least the implicit bit squared | no |
-| 18 | `libs/stark/float_ref.zig:187` | api | invariant | `add`: the scale carries at least the implicit bit | no |
-| 19 | `libs/stark/float_ref.zig:293` | internal | invariant | `roundInto`: `m > 0` is a post-condition of the reduction | no |
-| 20 | `libs/stark/quant_binding.zig:240` | api | invariant | `buildSystem`: builder emitted exactly the provenance columns it declared | no |
-| 21 | `libs/stark/quant_binding.zig:402` | internal | invariant | `addTerm`: cursor stays inside the factor array | no |
-| 22 | `libs/stark/quant_binding.zig:403` | internal | invariant | `addTerm`: cursor stays inside the term array | no |
-| 23 | `libs/stark/quant_binding.zig:425` | internal | invariant | `finishScopedConstraint`: cursor inside the constraint array | no |
-| 24 | `libs/stark/quant_binding.zig:426` | internal | invariant | `finishScopedConstraint`: the scope's terms are already written | no |
-| 25 | `libs/stark/chunk_binding.zig:240` | api | invariant | `buildSystem`: gadget count matches what the scale gadget emits | no |
-| 26 | `libs/merkle.zig:264` | api | invariant | `finish`: every declared name was written | no |
+| 7 | `libs/fri/domain.zig:106` | internal | invariant | `fill`: buffer length matches the domain size | no |
+| 8 | `libs/fri/domain.zig:135` | internal | invariant | `root`: the loop bound stays in range | no |
+| 9 | `libs/stark/root.zig:674` | internal | invariant | `honestTrace`: the transcript accumulator closes back to zero | no |
+| 10 | `libs/stark/barrel.zig:164` | api | invariant | `cfg.amount_bits >= 2` is a compile-time constant, not caller data | no |
+| 11 | `libs/stark/float_ref.zig:138` | api | invariant | `multiply`: product is at least the implicit bit squared | no |
+| 12 | `libs/stark/float_ref.zig:198` | api | invariant | `add`: the scale carries at least the implicit bit | no |
+| 13 | `libs/stark/float_ref.zig:304` | internal | invariant | `roundInto`: `m > 0` is a post-condition of the reduction | no |
+| 14 | `libs/stark/quant_binding.zig:240` | api | invariant | `buildSystem`: builder emitted exactly the provenance columns it declared | no |
+| 15 | `libs/stark/quant_binding.zig:402` | internal | invariant | `addTerm`: cursor stays inside the factor array | no |
+| 16 | `libs/stark/quant_binding.zig:403` | internal | invariant | `addTerm`: cursor stays inside the term array | no |
+| 17 | `libs/stark/quant_binding.zig:425` | internal | invariant | `finishScopedConstraint`: cursor inside the constraint array | no |
+| 18 | `libs/stark/quant_binding.zig:426` | internal | invariant | `finishScopedConstraint`: the scope's terms are already written | no |
+| 19 | `libs/stark/chunk_binding.zig:240` | api | invariant | `buildSystem`: gadget count matches what the scale gadget emits | no |
+| 20 | `libs/merkle.zig:264` | api | invariant | `finish`: every declared name was written | no |
 
 ## The result
 
 ```
-total        26
-kind:      api 13 · internal 7 · comptime 5 · fixture 0
-protection: caller 5 · invariant 21
-debt:        5
+total        20
+kind:      api 7 · internal 8 · comptime 5 · fixture 0
+protection: caller 0 · invariant 20
+debt:        0
 ```
 
 **Five, not twenty-six.** Classified by site alone this would have reported
@@ -86,11 +80,34 @@ twenty-one debts and been wrong about sixteen of them — the bias the
 coordinator flagged, concentrated in `libs/fri/` where a prover invariant
 looks like a missing public check.
 
-All five are the same shape: a public entry point that takes a count or a
-`keep` and asserts it is in range. Each is a real API gap, because in
-ReleaseFast the assert is gone and the caller gets nothing. The fix is
-converting them to a returned error at the API boundary, which is mechanical
-and is not done yet.
+The five that were `caller` debts are closed. All five were the same shape: a
+public entry point that takes a count or a `keep` and asserted it was in range.
+Each was a real API gap, because in ReleaseFast the assert is gone and the
+caller gets nothing — not a wrong answer, no answer. They became returned
+errors at the API boundary:
+
+| Site | Was | Now |
+|---|---|---|
+| `air_builder.freeze` | assert `rows > 0` | `error.EmptyRows` |
+| `air_builder.Trace.alloc` | assert `rows > 0` | `error.EmptyRows` |
+| `float_air.buildSystem` | assert `rows > 0` | `error.EmptyRows` |
+| `float_air.buildTraceShifted` | assert `rows > 0` | `error.EmptyRows` |
+| `float_ref.roundToNearestEven` | assert `0 < keep < 64` | `error.BadKeep` |
+| `fri.Domain.init` | assert `log_n <= 61` | `error.DomainTooLarge` |
+
+`roundToNearestEven` is the one that needed a signature change: it returned a
+bare `Rounded`, so there was nowhere to report a failure without changing every
+caller. Its `keep == 0` case shifted by a full word and `keep == 64` was an
+undefined shift — and in ReleaseFast both passed silently. It is now
+`Error!Rounded`, and `fp16_ref.MultiplyError` is the same set rather than a
+parallel declaration that could drift.
+
+Propagating `EmptyRows` upward was not free: three bindings declared their own
+error sets and would have rejected the new case, so `chunk_binding`,
+`quant_binding` and `widen_air` now compose `air_builder.BuildError` instead of
+restating it. **The measured count fell by three, not five** — one site held
+two asserts on the same contract, and the ledger is measured rather than
+maintained by hand precisely so that this shows up.
 
 `fixture 0` is a measured result, not an assumption: no assert in this
 repository lives in test code.

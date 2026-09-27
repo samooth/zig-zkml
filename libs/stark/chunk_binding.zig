@@ -141,7 +141,7 @@ pub fn cfgB(_: usize) scale_air.Config {
     };
 }
 
-pub const BuildError = error{ OutOfMemory, BadWidth, InvalidReductionLength };
+pub const BuildError = error{ OutOfMemory, BadWidth, InvalidReductionLength } || air_builder.BuildError;
 
 /// Chunked GEMM AIR + nibble range checks + dequantization equations for
 /// all 2·slots operands per row. Owns every allocation the returned

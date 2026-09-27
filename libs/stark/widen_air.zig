@@ -212,7 +212,7 @@ pub fn buildSystem(allocator: std.mem.Allocator, rows: usize, comptime f: Format
     return bld.freeze(allocator, &b, rows);
 }
 
-pub const BuildTraceError = error{ OutOfMemory, UnsupportedCase, OutOfRange };
+pub const BuildTraceError = error{ OutOfMemory, UnsupportedCase, OutOfRange } || bld.BuildError;
 
 /// One row per source pattern. The witness is `widen`'s own answer, so a
 /// disagreement between the AIR and the reference shows up as a failed
