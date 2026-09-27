@@ -20,7 +20,7 @@ layer's output was produced by the committed model weights.
 |---|---|
 | **Landed** | 4 engine adapters (Stages 0–4) · weights attestation + independent Python auditor · witness ABI v2 · STARK backend (FRI, column commitments, quotient) · GEMM AIR with operand binding, fp16 scale provenance and 16-MAC chunking · bit-exact float multiply for 4 formats |
 | **Next** | real-engine witness → per-format weight layer → fingerprint/sumcheck |
-| **Gates** | `zig build verify` — 261 tests (250 core + 11 zig-ai), C ABI, independent Python audit |
+| **Gates** | `zig build verify` — the test suite, C ABI, independent Python audit. The count is read from the CI log, not from here: this README is a living document and a number here is a photograph that rots |
 
 The plan was **reordered by what was measured** — the sumcheck prover became
 the critical path, and the weight layer and the witness source became F2/F3

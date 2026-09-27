@@ -13,7 +13,8 @@ tools/assert_ledger.sh          # rewrites the table below
 ```
 
 **No ratchet gate yet, on purpose.** `zig-algebra` has one because it has 391
-tests and changes rarely. This repository has 261, a prover in construction,
+tests and changes rarely. This repository has a suite in the low hundreds, a
+prover in construction,
 and a 1,500-line `float_air.zig` that gets rewritten often. A hard ratchet
 here would cost more friction than it returns until the prover stabilises. The
 completeness test below is the cheap half and catches the part that matters —
