@@ -1,8 +1,21 @@
 //! Canonical FRI over Goldilocks F_{p^2} — the zk-zkml L1 low-degree test.
 //!
-//! Post-spike decision (docs/BLUE_PRINT.md §12): zig-algebra's index-pairing FRI
-//! accepts arbitrary data (no RS structure, no degree semantics) — we
-//! build a proper one instead, following the Plonky3/Stone design:
+//! Post-spike decision (docs/BLUE_PRINT.md §12): we build our own rather than
+//! use zig-algebra's index-pairing FRI. The reason is the FIELD, not the
+//! algorithm. The norm-1 torus of F_{p^2} has order p + 1, and the 2-adic
+//! subgroup this degree test needs requires p + 1 to be *exactly* a power of
+//! two. Our Goldilocks is p = 2^61 - 1, so p + 1 = 2^61 and the torus order is
+//! a pure power of two. Upstream's is p = 2^64 - 2^32 + 1, where
+//! p + 1 = 2·(odd) and no such subgroup exists at any rate.
+//!
+//! The other reason once cited here — that the upstream FRI "accepts
+//! arbitrary data (no RS structure, no degree semantics)" — described a
+//! v1 defect, not a design difference. zig-algebra 0.3.2 is the v2 and it
+//! rejects random input; see its own regression test
+//! "fri v2: RANDOM data must be rejected (regression: ZA-2026-001)". Citing
+//! it against 0.3.2 would have been wrong, and a reader could not tell.
+//!
+//! Design follows Plonky3/Stone:
 //!
 //!   - The witness polynomial's evaluations lie on the order-2^k subgroup
 //!     H_k of the norm-1 torus of F_{p^2} (p + 1 = 2^61).

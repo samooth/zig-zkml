@@ -407,12 +407,18 @@ y eso lo atrapa `s[last] = c[last]`. Los tests de
 
 ## 5. Cómo verificarlo
 
+Esta nota no lleva cifras. El recuento de tests y el resultado de los
+gates se leen de la salida del comando, no de aquí: una copia escrita
+en un documento sin gate que la verifique queda vieja en silencio, que es
+peor que no ponerla. El README sí lleva el número porque el gate de CI lo
+comprueba — esa es la diferencia entre los dos, no una preferencia.
+
 ```sh
 zig build fmt
-zig build test --summary all        # 228 tests
-zig build verify --summary all      # 14/14 pasos, ABI + Python
+zig build test --summary all        # el recuento vive en la linea Build Summary
+zig build verify --summary all      # ABI + auditoria Python independiente
 zig build -Doptimize=ReleaseFast test --summary all
-zig build spike                     # auditoría FRI 3/3
+zig build spike                     # auditoria FRI
 zig build bench --summary all -- --k 256 --repeat 1
 ```
 
