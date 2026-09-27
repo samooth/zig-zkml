@@ -74,6 +74,35 @@ model. Two corollaries that have earned their place:
 The status vocabulary is the contract. A change that lands `HECHO` without a
 gate is not `HECHO`.
 
+## Prose is audited like code
+
+A claim in a document is a claim. The audit that caught five of them in
+`README.md` is the model, and the failures were never wrong facts so much as
+facts in the wrong place.
+
+**Prominence has to match the audience, and the payload belongs next to the
+trigger — not in the lede.** Three instances of the same shape, all of which
+happened here:
+
+| What was prominent | Where the decision is actually made |
+|---|---|
+| the name "Goldilocks", in 38 files | the M31-vs-Goldilocks distinction, nowhere |
+| the *false* reason for the FRI fork, in a code comment | the true reason, nowhere |
+| 24 lines of `expf` approximation detail, at line 11 | F3/F4 are scoped at line 184 |
+
+The README lede used to open with the native-path verification argument —
+twenty-four lines, before the reader knew what the library did. It is now three
+lines that state the claim and point at [F2](README.md#f2--stark-backend), where
+the detail now sits, directly above the Roadmap row that depends on it. That is
+not deferral: deferred is not invisible, it is positioned. The risk of moving
+something down is only that it lands where nobody looks.
+
+Deferring it two sections is not the same as deferring it twelve.
+
+**A test that pins the specific error beats one that pins accept-or-reject**, for
+the same reason: specificity is what makes a failure diagnosable. See
+[UnsupportedCase → SubnormalInput](libs/stark/float_ref.zig) below.
+
 ## Git
 
 - **The remote belongs to the person.** Prepare the work, verify it, and hand
@@ -142,8 +171,16 @@ zig build vllm-adapter
 zig build bench-fingerprint
 ```
 
-`llama-adapter` and `kt-adapter` need sibling checkouts and are local gates only;
-CI cannot run them. The count in the summary line is the count CI asserts.
+`llama-adapter` and `kt-adapter` need sibling checkouts and are local gates
+only; CI cannot run them. They do pass on a machine that has the siblings, so
+"CI cannot run them" is not "they are broken".
+
+The count in the summary line is the count CI asserts.
+
+**Report the same seven every time.** When a status update lists the gates,
+it lists all seven or none. A summary that says "the five gates pass" when
+there are seven is the same genre of error as a stale test count in a
+document: a number that is not derived from the list drifts.
 
 ## Soundness rules that are not negotiable
 

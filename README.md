@@ -9,29 +9,12 @@ vLLM, zig-ai, ktransformers-zig** — via per-engine adapters: prove that a
 layer's output was produced by the committed model weights.
 
 > **Design principle: the QuantScheme is normative, and the kernel runs its
-> arithmetic in recorded mode.** The statement defines the exact arithmetic the
-> proof verifies, and the kernel runs *that* — not the engine's native kernel.
-> The reason is arithmetic, not taste: the native fast path accumulates in
-> FP32/BF16 with rounding at every step while field arithmetic is exact, so a
-> witness taken from the fast path does not satisfy the constraints. There is
-> no approximation here to tune; the dual path is what makes the proof about
-> the thing the model actually computed.
->
-> This has two halves, and it is worth keeping them apart:
->
-> - **F0/F1 (shipped):** the native kernels *are* the product. Each adapter
->   reads weights, hashes them and publishes a root. There is no circuit yet.
-> - **F2+:** the dual path above applies, and the engine's native path is
->   **not verifiable by construction** — `ggml_vec_silu_f32` alone dispatches to
->   six `expf` approximations that differ in the last bit, so a witness
->   recorded on one CPU is not one the same proof would accept on another.
->   Universality is across models and across *recorded* kernels, not across
->   engine implementations.
->
-> See [ADR-0001](docs/decisions/ADR-0001-zkml-vs-blueprint.md) decision 1 for
-> the arithmetic argument and [ADR-0003](docs/decisions/ADR-0003-nonlinearity-tables.md)
-> for the engine-variance measurement. This is the constraint that shapes the
-> F3 and F4 decisions, so it is stated here rather than deferred.
+> arithmetic in recorded mode.** For F0/F1 the native kernels are the product.
+> From F2 on they are not verifiable by construction, and the proof verifies the
+> gadget's own arithmetic instead. Full argument, and the engine-variance
+> measurement behind it: [ADR-0001](docs/decisions/ADR-0001-zkml-vs-blueprint.md),
+> [ADR-0003](docs/decisions/ADR-0003-nonlinearity-tables.md), and
+> [F2 — STARK backend](#f2--stark-backend).
 
 | | |
 |---|---|
@@ -57,7 +40,7 @@ matrix and staging. Design decisions are logged under
 - [Architecture](#architecture)
 - [Building and testing](#building-and-testing)
 - [Roadmap](#roadmap)
-- [F2 — STARK backend](#f2-stark-backend)
+- [F2 — STARK backend](#f2--stark-backend)
 - [Cost, measured](#cost-measured)
 - [Requirements](#requirements)
 - [Documentation](#documentation)
@@ -188,11 +171,23 @@ re-derives the root from the manifest and verifies the proof bytes.
 | **F0** | Weights attestation (Blake3 + Merkle at load time) | lib + C ABI + independent auditor done, **all four adapters done** | load overhead < 5% (not yet measured) |
 | **F1** | Deterministic, auditable sampling | `zkml_transcript_seed` in the ABI; adapters consume it | zero kernel changes |
 | **Witness ABI v2** | `zkml_witness_*` session / record / finalize | done (`ZKML_ABI_VERSION = 2`) | determinism test green |
-| **F2** | STARK backend + GEMM AIR | backend done, see [below](#f2-stark-backend) | backend negatives green |
+| **F2** | STARK backend + GEMM AIR | backend done, see [below](#f2--stark-backend) | backend negatives green |
 | **F3** | `zkml_prove_layer` / `zkml_verify_layer` for one layer | pending | proof < 1 MB, verify < 100 ms, ±1 ulp rejected |
-| **F4** | Multi-block recursion over the fingerprint statement | **arithmetic core done** and **commitment order enforced** (`fingerprint_bind.zig`: u, v drawn only after both roots are absorbed); measured 36–309× faster than the oracle. AIR and tile aggregation pending. **Sumcheck is the critical path** | product decision |
+| **F4** | Multi-block recursion over the fingerprint statement | **arithmetic core done** and **commitment order enforced** (`fingerprint_bind.zig`: u, v drawn only after both roots are absorbed); measured 36–309× faster than the oracle. AIR and tile aggregation pending. **Sumcheck is the critical path** | product decision — scope it only after [F2](#f2--stark-backend) on native-path verifiability |
 
 ## F2 — STARK backend
+
+**Read this before scoping F3 or F4.** The engine's native path is not
+verifiable by construction, and that is what decides those two phases. In
+`llama.cpp@1c3c9674d` alone, `ggml_vec_silu_f32` dispatches to six `expf`
+approximations that differ in the last bit, so a witness recorded on one CPU is
+not one the same proof accepts on another. There is no kernel to bind to: the
+non-linearity tables are the specification instead, and their digest is a
+public input of the statement. Universality is across models and across
+*recorded* kernels, not across engine implementations.
+[ADR-0003](docs/decisions/ADR-0003-nonlinearity-tables.md) has the full
+reasoning; [ADR-0001](docs/decisions/ADR-0001-zkml-vs-blueprint.md) decision 1
+has the arithmetic argument for the dual path.
 
 `libs/stark/` proves a composed quotient. What is done:
 
@@ -245,16 +240,22 @@ take the ratios, not the absolute numbers, as the stable claim. The
 per-element STARK is a **reference implementation, not a product path** — the
 fingerprint statement is what changes that, at O(m+n) instead of O(mnk), which
 is why the sumcheck prover sits on the critical path. A full model is **not
-viable today**; state of the art is ≤1B parameters with dedicated teams.
+viable today** with the per-element path — the cost table above is why. How
+far whole-model proving goes is a moving target and this document does not
+claim a figure for it; the prior-art survey in `docs/archive/zkML.md` is the
+historical reading, and it is dated.
 
 ## Requirements
 
-- Zig `0.16.0` (stable; `0.16.0-dev.2535+` also works)
+- Zig `0.16.0` stable. A `0.16.0-dev` build happens to pass today, but it
+  formats and type-checks differently and CI installs the release — a green run
+  on it is not a verified run (see `AGENTS.md`)
 - Python 3.8+ with `blake3` (`pip install blake3`) — only for the independent
   audit tool and `zig build verify`
-- [zig-algebra](https://github.com/samooth/zig-algebra) (L0) and
-  [zig-zk](https://github.com/samooth/zig-zk) (L1) — not needed until F2
-  (F0/F1 are self-contained in `libs/`); see docs/BLUE_PRINT.md §12
+- [zig-algebra](https://github.com/samooth/zig-algebra) — the only declared
+  dependency, for `zig-merkle` and `zig-fri`. `zig-zk` is **not** a dependency
+  and is not consumed; the STARK backend here is our own (see
+  [Architecture](#architecture))
 - Linux x86_64 (primary)
 - Per-adapter extras: a **built** llama.cpp checkout + CMake, vLLM + ctypes,
   and a **built** ktransformers-zig checkout — see `adapters/`
