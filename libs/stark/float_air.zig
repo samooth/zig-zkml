@@ -1094,7 +1094,55 @@ pub const BuildTraceError = error{
     /// inf/NaN result). S1 does not cover those and says so instead of
     /// proving something plausible but wrong.
     UnsupportedCase,
+    /// A subnormal INPUT, named as such.
+    ///
+    /// This existed as a silent hole before: the AIR classifies an input as
+    /// zero / finite / inf / NaN, and a subnormal matches none of them, so the
+    /// trace is unsatisfiable and `prove` failed with a generic
+    /// `ConstraintViolation` several minutes in. Rejecting the pair here, with
+    /// a name for the reason, turns an hour of debugging into a line of text.
+    ///
+    /// It is an early check, not a replacement: the AIR still rejects the same
+    /// inputs on its own, so a bug in this detection can only make the prover
+    /// refuse more, never accept something unsound.
+    ///
+    /// §4.3 is what would lift it, at a cost of roughly doubling the reducer
+    /// (86 -> 170 composed constraints in binary16) and raising the verifier's
+    /// ceiling from 4096 to 8192.
+    SubnormalInput,
 };
+
+/// Why a pair cannot be proven, if it cannot. `null` means it can.
+///
+/// Exposed so a caller can check a batch up front and report which rows fail
+/// and why, instead of discovering it one `prove` at a time.
+pub const Unsupported = union(enum) {
+    /// exponent field is zero with a non-zero mantissa, on either operand.
+    subnormal_input: struct { row: usize, operand: u1 },
+};
+
+/// Inspect a batch of multiply pairs and return the first unsupported row, or
+/// null when every row is provable. Only the cases S1 does not cover are
+/// reported; a bad result (inf/NaN/subnormal) still comes out as
+/// `UnsupportedCase` from `buildTrace`, because that is a property of the
+/// product rather than of the input.
+pub fn diagnose(
+    pairs: []const [2]u16,
+    comptime f: Format,
+) BuildTraceError!?Unsupported {
+    for (pairs, 0..) |pair, row| {
+        inline for ([_]u8{ 0, 1 }) |which| {
+            const bits = if (which == 0) pair[0] else pair[1];
+            const p = f.parts(bits);
+            // exponent == 0 with a non-zero mantissa is exactly the subnormal
+            // encoding; mantissa == 0 is a plain zero, which the AIR handles.
+            if (p.exponent == 0 and p.mantissa != 0) {
+                return .{ .subnormal_input = .{ .row = row, .operand = which } };
+            }
+        }
+    }
+    return null;
+}
 
 fn set(cols: [][]Fp2, col: u16, r: usize, v: u64) void {
     cols[col][r] = Fp2.re(Goldilocks.fromU64(v));
@@ -1181,8 +1229,28 @@ pub fn buildTraceShifted(
         // than accepting them: a subnormal matches no class, so the
         // exhaustiveness constraint cannot be satisfied. Zero, infinity and
         // NaN are IN scope from here on.
-        if (pa.exponent == 0 and pa.mantissa != 0) return BuildTraceError.UnsupportedCase;
-        if (pb.exponent == 0 and pb.mantissa != 0) return BuildTraceError.UnsupportedCase;
+        //
+        // The AIR would reject these anyway, several minutes later, as an
+        // opaque `ConstraintViolation` from the quotient division. Checking
+        // here names the reason instead, which is the difference between an
+        // hour of debugging and a line of text. It cannot make anything less
+        // sound: it can only refuse more, never accept.
+        if (pa.exponent == 0 and pa.mantissa != 0) {
+            std.log.scoped(.warn).warn(
+                "row {d} operand a is a subnormal; the float AIR does not support them " ++
+                    "(§4.3). Use float_ref, or implement the mantissa normalisation.",
+                .{r},
+            );
+            return BuildTraceError.SubnormalInput;
+        }
+        if (pb.exponent == 0 and pb.mantissa != 0) {
+            std.log.scoped(.warn).warn(
+                "row {d} operand b is a subnormal; the float AIR does not support them " ++
+                    "(§4.3). Use float_ref, or implement the mantissa normalisation.",
+                .{r},
+            );
+            return BuildTraceError.SubnormalInput;
+        }
         const expected = float_ref.multiply(f, a, b) catch return BuildTraceError.UnsupportedCase;
         const pc = f.parts(expected);
         // An infinite result is IN SCOPE now (the overflow flag is what

@@ -213,8 +213,12 @@ test "float air binary16: cases outside S1 scope are refused, not approximated" 
     const cases = [_][2]u16{ .{ sub, one }, .{ one, sub } };
     for (cases) |c| {
         const one_pair = [_][2]u16{c};
+        // A subnormal INPUT now reports SubnormalInput rather than the
+        // generic UnsupportedCase: the AIR refuses it either way, but the
+        // named error is what tells you which of the out-of-scope cases you
+        // hit. §4.3 is what lifts it.
         try testing.expectError(
-            air.BuildTraceError.UnsupportedCase,
+            air.BuildTraceError.SubnormalInput,
             air.buildTrace(a, &one_pair, F16),
         );
     }
@@ -674,8 +678,9 @@ test "float air: out-of-scope cases are refused in every format" {
         };
         for (cases) |c| {
             const one_pair = [_][2]u16{c};
+            // Named error, same reason as the binary16 case above.
             try testing.expectError(
-                air.BuildTraceError.UnsupportedCase,
+                air.BuildTraceError.SubnormalInput,
                 air.buildTrace(a, &one_pair, f),
             );
         }
@@ -901,4 +906,78 @@ test "float air: the rounding corners prove and verify" {
     defer proof.deinit(a);
     var vt = stark.Transcript.init(TRANSCRIPT);
     try testing.expect(try stark.verify(&vt, &proof, sys.system(), CONFIG));
+}
+
+test "float air: diagnose names the row and the operand of a subnormal" {
+    // `diagnose` exists so a caller can check a whole batch up front and be
+    // told WHICH row and WHICH operand, instead of finding out one `prove` at
+    // a time. This is its only justification, so it gets a test for every
+    // direction it can report.
+    const fmt = F16;
+
+    const sub_a: u16 = fmt.pack(.{ .sign = 0, .exponent = 0, .mantissa = 1 });
+    const sub_b: u16 = fmt.pack(.{ .sign = 1, .exponent = 0, .mantissa = 511 });
+    const one: u16 = fmt.pack(.{ .sign = 0, .exponent = @intCast(fmt.bias), .mantissa = 0 });
+    const two: u16 = fmt.pack(.{ .sign = 0, .exponent = @intCast(fmt.bias), .mantissa = 0 });
+
+    // Both positions are reported, and the operand field is what tells them
+    // apart: the same value on a and on b is a different bug in the caller.
+    const on_a = [_][2]u16{ .{ sub_a, one }, .{ two, two } };
+    const r1 = try air.diagnose(&on_a, F16);
+    try testing.expect(r1 != null);
+    try testing.expectEqual(@as(usize, 0), r1.?.subnormal_input.row);
+    try testing.expectEqual(@as(u1, 0), r1.?.subnormal_input.operand);
+
+    const on_b = [_][2]u16{.{ one, sub_b }};
+    const r2 = try air.diagnose(&on_b, F16);
+    try testing.expect(r2 != null);
+    try testing.expectEqual(@as(u1, 1), r2.?.subnormal_input.operand);
+
+    // The row index is the one that failed, not the first: a clean pair in
+    // front must not mask a subnormal behind it.
+    const late = [_][2]u16{ .{ one, one }, .{ two, two }, .{ sub_a, one } };
+    const r3 = try air.diagnose(&late, F16);
+    try testing.expectEqual(@as(usize, 2), r3.?.subnormal_input.row);
+
+    // A clean batch is null. If this returned a non-null for an ordinary pair,
+    // callers would start refusing valid witnesses, which would be a
+    // soundness-of-availability bug in the guard itself.
+    const clean = [_][2]u16{ .{ one, one }, .{ one, two }, .{ two, one } };
+    try testing.expectEqual(@as(?air.Unsupported, null), try air.diagnose(&clean, F16));
+
+    // A signed zero is NOT a subnormal: exponent 0 with a zero mantissa is
+    // plain zero, which the AIR handles and must not be refused here.
+    const zero: u16 = fmt.pack(.{ .sign = 0, .exponent = 0, .mantissa = 0 });
+    const with_zero = [_][2]u16{ .{ zero, one }, .{ one, zero } };
+    try testing.expectEqual(@as(?air.Unsupported, null), try air.diagnose(&with_zero, F16));
+}
+
+test "float air: diagnose agrees with buildTrace on what it refuses" {
+    // A guard that disagrees with the thing it guards is worse than no guard:
+    // it would promise a name the caller never gets. Every pair is run through
+    // both and the verdicts are compared.
+    const fmt = F16;
+    const one: u16 = fmt.pack(.{ .sign = 0, .exponent = @intCast(fmt.bias), .mantissa = 0 });
+    const sub: u16 = fmt.pack(.{ .sign = 0, .exponent = 0, .mantissa = 1 });
+    const huge: u16 = fmt.pack(.{ .sign = 0, .exponent = fmt.emax(), .mantissa = 0 });
+
+    const cases = [_][2]u16{
+        .{ one, one },
+        .{ sub, one },
+        .{ one, sub },
+        .{ huge, one }, // inf, in scope
+    };
+    for (cases) |r| {
+        const pair = [_][2]u16{r};
+        const predicted = (try air.diagnose(&pair, fmt)) != null;
+        var actual = false;
+        if (air.buildTrace(testing.allocator, &pair, fmt)) |ok_const| {
+            var ok = ok_const;
+            defer ok.deinit(testing.allocator);
+            actual = false; // it built: in scope
+        } else |e| {
+            actual = (e == air.BuildTraceError.SubnormalInput);
+        }
+        try testing.expectEqual(predicted, actual);
+    }
 }
