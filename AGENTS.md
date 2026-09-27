@@ -182,6 +182,35 @@ it lists all seven or none. A summary that says "the five gates pass" when
 there are seven is the same genre of error as a stale test count in a
 document: a number that is not derived from the list drifts.
 
+## Reports carry their validity condition
+
+**Every report states `valid at <commit-sha>`.** A report is a photograph, and
+a photograph goes stale silently.
+
+**Any claim about another repository is re-verified with a command before
+acting on it.** This is not caution, it is a measured failure: three claims in
+one session that `zig-algebra` had no `v0.5.1` were all written before it was
+published, and were re-emitted verbatim afterwards instead of regenerated. The
+local half did not change because nobody worked on it; the cross-repo half
+changed because the other repository moved. That asymmetry is the whole cause.
+
+The same shape as the test count: a copy of a checkable fact elsewhere
+desynchronises, and the only cure is that nobody reads it without refreshing it.
+That is why the test count left the README.
+
+### A pin bump changes a signature — re-read the errors
+
+The exit code is not the gate. Concretely, `zig_algebra` v0.5.1 turned
+`Domain.init`'s `std.debug.assert` into a returned error (its own reason: the
+assert is compiled out in `ReleaseFast`, where `two_adicity - log_n` then
+underflowed). Six of the seven gates still returned 0, and the one that failed
+did so in a line I had walked past. The fix was one line and the commit was
+amended, but **why it needed amending lived only in the reporting** — the
+remote would have seen a green commit and no red one underneath.
+
+So: after a dependency bump, re-read the compile output, not just the exit
+codes. An amended commit is green by the time anyone sees it.
+
 ## Soundness rules that are not negotiable
 
 From `.private/TODO.md` §8. These are the ones that have already cost a bug.
