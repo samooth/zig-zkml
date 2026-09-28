@@ -110,6 +110,10 @@ pub fn expected_constraints(f: Format) usize {
 /// Build the widening AIR: one row per source pattern.
 pub fn buildSystem(allocator: std.mem.Allocator, rows: usize, comptime f: Format) BuildError!bld.Owned {
     const L = Layout(f);
+    // Before the builder allocates anything, matching float_air.buildSystem.
+    // Checking after the first allocation would leak it: this function has no
+    // `errdefer` for the builder, and adding one is a separate claim.
+    if (rows == 0) return BuildError.EmptyRows;
     var b = Builder.init(allocator);
     const shift: u16 = binary32.mant_bits - f.mant_bits;
 

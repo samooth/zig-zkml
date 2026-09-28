@@ -20,6 +20,9 @@ const air_builder = @import("air_builder.zig");
 const float_ref = @import("float_ref.zig");
 const float_air = @import("float_air.zig");
 const domain = @import("../fri/domain.zig");
+const widen_air = @import("widen_air.zig");
+const chunk_binding = @import("chunk_binding.zig");
+const quant_binding = @import("quant_binding.zig");
 const float_format = @import("float_format.zig");
 
 test "air_builder.freeze: zero rows is EmptyRows, not an empty system" {
@@ -46,6 +49,22 @@ test "float_air.buildSystem: zero rows is EmptyRows" {
     );
 }
 
+test "float_air.buildTraceShifted: no pairs is EmptyRows" {
+    // Same shape as buildSystem, and a separate entry point — the two are
+    // closed independently because a guard is only a claim about the site it
+    // stands on.
+    const no_pairs: [0][2]u16 = .{};
+    try testing.expectError(
+        float_air.BuildTraceError.EmptyRows,
+        float_air.buildTraceShifted(testing.allocator, &no_pairs, float_format.bfloat16, 1),
+    );
+    // One pair is the boundary that must still build, so the guard is not
+    // over-tight.
+    const one_pair = [_][2]u16{.{ 0x3F80, 0x4000 }};
+    var t = try float_air.buildTraceShifted(testing.allocator, &one_pair, float_format.bfloat16, 1);
+    defer t.deinit(testing.allocator);
+}
+
 test "float_ref.roundToNearestEven: keep out of range is BadKeep, not a shifted word" {
     // keep == 0 shifted by a full word; keep == 64 is an undefined shift. In
     // ReleaseFast both used to return a Rounded with no diagnostic.
@@ -66,4 +85,54 @@ test "fri.Domain.init: log_n above the torus order is DomainTooLarge" {
     // 0 is the trivial subgroup and is explicitly valid, as is the boundary.
     _ = try domain.Domain.init(0);
     _ = try domain.Domain.init(61);
+}
+
+// --- the composed error sets -------------------------------------------------
+//
+// Composing `air_builder.BuildError` into three bindings was a signature
+// change, and a signature change nothing can tumble has the same shape as
+// everything the other six commits closed. So: two of these are runtime tests
+// of a path that can actually be taken, and the third is honest about the
+// fact that its case is currently unreachable.
+
+test "widen_air.buildSystem: EmptyRows crosses the composed error set" {
+    // `widen_air` forwards the caller's `rows` to `air_builder.freeze`, so the
+    // zero-row case is reachable here and must arrive under its own name.
+    try testing.expectError(
+        air_builder.BuildError.EmptyRows,
+        widen_air.buildSystem(testing.allocator, 0, float_format.bfloat16),
+    );
+}
+
+test "widen_air.buildTrace: EmptyRows crosses the composed error set" {
+    // Same for the trace path, which composes into `BuildTraceError`.
+    const no_patterns: [0]u16 = .{};
+    try testing.expectError(
+        air_builder.BuildError.EmptyRows,
+        widen_air.buildTrace(testing.allocator, &no_patterns, float_format.bfloat16),
+    );
+}
+
+test "chunk_binding and quant_binding admit the composed case, though it is unreachable" {
+    // Both call `air_builder.freeze(allocator, &b, 1)` with a literal 1, so
+    // `EmptyRows` cannot be raised on those paths today. The composition is
+    // still correct — it is what will let a future caller-supplied row count
+    // through without a second round of signature surgery — and this test pins
+    // the part of that claim which is checkable: the sets admit the value.
+    //
+    // What it deliberately does NOT do is pretend a runtime test happened.
+    // There is no input that produces one, and a test that asserted one would
+    // be asserting nothing.
+    const from_builder: air_builder.BuildError = error.EmptyRows;
+    comptime {
+        // Fails to compile if either binding ever stops composing the
+        // builder's set, which is the regression this composition exists to
+        // prevent.
+        const as_chunk: chunk_binding.BuildError = from_builder;
+        const as_quant: quant_binding.BuildError = from_builder;
+        const as_widen: widen_air.BuildError = from_builder;
+        std.mem.doNotOptimizeAway(&as_chunk);
+        std.mem.doNotOptimizeAway(&as_quant);
+        std.mem.doNotOptimizeAway(&as_widen);
+    }
 }

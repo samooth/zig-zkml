@@ -19,7 +19,7 @@ layer's output was produced by the committed model weights.
 | | |
 |---|---|
 | **Landed** | 4 engine adapters (Stages 0–4) · weights attestation + independent Python auditor · witness ABI v2 · STARK backend (FRI, column commitments, quotient) · GEMM AIR with operand binding, fp16 scale provenance and 16-MAC chunking · bit-exact float multiply for 4 formats |
-| **Next** | real-engine witness → per-format weight layer → FRI over the fingerprint AIR (the rank-1 arithmetic and its commitment order are done and measured; see [F2](README.md#f2--stark-backend)) → sumcheck, contributed upstream to `zig-algebra` |
+| **Next** | real-engine witness → per-format weight layer → FRI over the fingerprint AIR (the rank-1 arithmetic and its commitment order are done and measured; see [F2](README.md#f2--stark-backend)) → sumcheck, to be contributed upstream to `zig-algebra` |
 | **Gates** | `zig build verify` — the test suite, C ABI, independent Python audit. The count is read from the CI log, not from here: this README is a living document and a number here is a photograph that rots |
 
 The plan was **reordered by what was measured** — the sumcheck prover became
@@ -215,8 +215,8 @@ has the arithmetic argument for the dual path.
   a LogUp core, and a tested barrel-shifter gadget.
 
 Still pending: the real-engine witness, the per-format weight layer, FRI over
-the fingerprint AIR, fp32 accumulation, and sumcheck — the last one contributed
-upstream to `zig-algebra` rather than implemented here.
+the fingerprint AIR, fp32 accumulation, and sumcheck — the last one to be
+contributed upstream to `zig-algebra` rather than implemented here.
 
 **The fingerprint is arithmetic and a commitment order, not a proof.** What is
 measured: a rank-1 `u ⊗ v` challenge, an identity, an oracle check, and a

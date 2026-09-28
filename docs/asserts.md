@@ -105,9 +105,28 @@ parallel declaration that could drift.
 Propagating `EmptyRows` upward was not free: three bindings declared their own
 error sets and would have rejected the new case, so `chunk_binding`,
 `quant_binding` and `widen_air` now compose `air_builder.BuildError` instead of
-restating it. **The measured count fell by three, not five** — one site held
+restating it. **The measured count fell by three, not six** — one site held
 two asserts on the same contract, and the ledger is measured rather than
 maintained by hand precisely so that this shows up.
+
+Composing a set is a signature change, and a signature change that nothing can
+tumble is the same shape as the six debts just closed, so it is tested too. The
+three bindings are not equal in what they can prove:
+
+- `widen_air` forwards the caller's `rows` to `air_builder.freeze`, so
+  `EmptyRows` is reachable on both its `buildSystem` and its `buildTrace` and
+  is tested at runtime on both.
+- `chunk_binding` and `quant_binding` call `freeze(allocator, &b, 1)` with a
+  literal `1`. Their composed case is **unreachable today**, and the test says
+  so: it pins the part that is checkable — that the sets admit the value — and
+  deliberately does not fabricate a runtime test for an input that cannot
+  produce one.
+
+Writing that runtime test found a real leak. `widen_air.buildSystem` allocated
+the builder and had no `errdefer` for it, so failing on zero rows leaked three
+allocations. The guard now runs before the first allocation, which is what
+`float_air.buildSystem` already did; giving `widen_air` an `errdefer` is a
+separate claim and is not made here.
 
 `fixture 0` is a measured result, not an assumption: no assert in this
 repository lives in test code.
