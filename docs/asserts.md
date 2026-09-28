@@ -128,5 +128,24 @@ allocations. The guard now runs before the first allocation, which is what
 `float_air.buildSystem` already did; giving `widen_air` an `errdefer` is a
 separate claim and is not made here.
 
+**The leak is a class, not a finding, and it is now closed as one.** Converting
+an assertion into a returned error converts an abort into an unwind path that
+did not exist before: an aborting process leaks nothing, an unwinding one
+leaks everything acquired ahead of the guard. So every one of the six
+conversions is a potential leak site, and the question is binary per guard —
+does it fire after an allocation?
+
+Counting `errdefer`s next to guards does not answer it. That is a ratio, and
+`widen_air` had two `errdefer`s and still leaked: the ratio was comfortable
+where the property was absent. What answers it is running each guard through
+`testing.allocator`, which fails the test on a leak. The last test in
+`libs/stark/caller_guard_test.zig` does that for all eight, in one block on
+purpose — the claim is a property of the set of conversions, and a test that
+ran only the first of them would pass just as happily.
+
+The audit found one leak in eight. `float_ref.roundToNearestEven` allocates
+nothing and cannot leak; the two guards that do reach an allocating call are
+the ones where the guard *is* the allocation.
+
 `fixture 0` is a measured result, not an assumption: no assert in this
 repository lives in test code.

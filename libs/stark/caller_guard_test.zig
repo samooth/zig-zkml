@@ -136,3 +136,65 @@ test "chunk_binding and quant_binding admit the composed case, though it is unre
         std.mem.doNotOptimizeAway(&as_widen);
     }
 }
+
+// --- the class: every guard, asked whether it leaks ---------------------------
+//
+// Converting an assertion into a returned error converts an abort into an
+// unwind path that did not exist before. An aborting process leaks nothing;
+// an unwinding one leaks everything acquired ahead of the guard unless an
+// `errdefer` says otherwise. So each conversion is a leak site, and the
+// question is binary per guard: does it fire after an allocation?
+//
+// A grep cannot answer that — it counts `errdefer`s next to guards, which is
+// a ratio, and `widen_air` had two `errdefer`s and still leaked. What answers
+// it is running every guard through `testing.allocator`, which fails the
+// test on a leak. That is the whole test: if a guard fires after an
+// allocation and nothing releases it, the allocator reports it here.
+
+test "every converted guard unwinds without leaking" {
+    // One block, one allocator, every guard in turn. Kept together on
+    // purpose: the claim is a property of the *set* of conversions, and a
+    // test that only ran the first of them would pass just as happily.
+    const a = testing.allocator;
+
+    // Before any allocation: pure, so it cannot leak, and the test says so by
+    // running it rather than by asserting that it cannot.
+    try testing.expectError(float_ref.Error.BadKeep, float_ref.roundToNearestEven(1, 0));
+    try testing.expectError(error.DomainTooLarge, domain.Domain.init(63));
+
+    // Guards that fire before their first allocation.
+    try testing.expectError(
+        float_air.BuildError.EmptyRows,
+        float_air.buildSystem(a, 0, float_format.bfloat16),
+    );
+    {
+        const no_pairs: [0][2]u16 = .{};
+        try testing.expectError(
+            float_air.BuildTraceError.EmptyRows,
+            float_air.buildTraceShifted(a, &no_pairs, float_format.bfloat16, 1),
+        );
+    }
+    try testing.expectError(
+        air_builder.BuildError.EmptyRows,
+        widen_air.buildSystem(a, 0, float_format.bfloat16),
+    );
+    {
+        const no_patterns: [0]u16 = .{};
+        try testing.expectError(
+            air_builder.BuildError.EmptyRows,
+            widen_air.buildTrace(a, &no_patterns, float_format.bfloat16),
+        );
+    }
+
+    // The two that reach an `errdefer`-protected allocation: the guard *is*
+    // the allocating call, so a failure inside it must leave nothing behind.
+    {
+        var b = air_builder.Builder.init(a);
+        defer b.deinit();
+        try testing.expectError(air_builder.BuildError.EmptyRows, air_builder.freeze(a, &b, 0));
+    }
+    try testing.expectError(
+        air_builder.BuildError.EmptyRows,
+        air_builder.Trace.alloc(a, 3, 0),
+    );
+}
