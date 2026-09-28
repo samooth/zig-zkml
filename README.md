@@ -232,6 +232,15 @@ rejected, a random trace is refused, every rounding witness of every format is
 flipped and rejected, and **3249 reference pairs per format** are swept against
 the reference with every constraint evaluated.
 
+That 3249 is asserted exactly, not bounded. The sweep enumerates 9 exponents ×
+9 exponents × 7 mantissas × 7 mantissas = 3969 candidate pairs per format, and
+3249 of them survive two filters: a subnormal *input* is out of scope in either
+position ([§4.3](docs/BLUE_PRINT.md)), and a pair the reference cannot answer
+is not in the reference's scope either. The filters are why the count is not a
+clean product — which is why the test pins the number instead of deriving it,
+and why the assertion is exact. Change the window, the filters or the format
+set and the gate fails, at which point this figure has to move with it.
+
 ## Cost, measured
 
 Not estimated — measured with `zig build bench`:

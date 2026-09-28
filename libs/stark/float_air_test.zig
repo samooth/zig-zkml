@@ -856,10 +856,22 @@ test "float air: every input class, and the attacks on the classifier" {
 }
 
 test "float air: a sweep of every format agrees with the reference" {
+    // Exact, and deliberately so. The sweep is 9 exps x 9 exps x 7 mantissas
+    // x 7 mantissas = 3969 candidate pairs per format, of which 3249 survive
+    // the two filters below it: a subnormal INPUT is out of scope in either
+    // position (§4.3), and a pair the reference cannot answer is not in the
+    // reference's scope either. The filters are the reason the count is not a
+    // clean product, which is exactly why it is asserted rather than computed.
+    //
+    // This was `checked > 100`, which asserted nothing about the number. A
+    // bound that wide survives a sweep silently reduced to a tenth of itself,
+    // and a new format added to the list inherits the same non-assertion. The
+    // exact number is the claim: when the window, the filters or the format
+    // set change, this fails and README.md:232 has to move with it.
     inline for (.{ F16, fmt_lib.bfloat16, fmt_lib.fp8_e4m3, fmt_lib.fp8_e5m2 }) |f| {
         const checked = try sweepFormat(f);
         std.debug.print("SWEEP {s}: {d} pairs\n", .{ f.name, checked });
-        try testing.expect(checked > 100);
+        try testing.expectEqual(@as(usize, 3249), checked);
     }
 }
 
