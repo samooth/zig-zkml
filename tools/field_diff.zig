@@ -18,8 +18,20 @@ const Theirs = zf.M61;
 var failures: usize = 0;
 var checks: usize = 0;
 
+// El desglose lo cuenta la herramienta, no una persona. Ya se escribio
+// "1264 - 1024 = 256" en un mensaje cuando el incremento era 240, porque
+// contar a mano no detecta el error que uno mismo acaba de cometer.
+var by_check: std.StringHashMapUnmanaged(usize) = .{};
+
+fn tally(name: []const u8) void {
+    const gop = by_check.getOrPut(std.heap.page_allocator, name) catch @panic("oom");
+    if (!gop.found_existing) gop.value_ptr.* = 0;
+    gop.value_ptr.* += 1;
+}
+
 fn note(comptime what: []const u8, ok: bool) void {
     checks += 1;
+    tally(what);
     if (!ok) {
         failures += 1;
         std.debug.print("  DISCREPANCIA {s}\n", .{what});
@@ -121,8 +133,21 @@ fn cmpPredicates(a_in: u64) void {
     const A = mine.Goldilocks.fromU64(a_in);
     const TA = Theirs.fromInt(a_in);
     note("isZero", A.isZero() == TA.isZero());
-    note("eql", (A.eql(mine.Goldilocks.fromU64(a_in))) == TA.eql(TA));
     note("toU64", mineToU64(A) == theirsToU64(TA));
+}
+
+/// `eql` is a predicate over a PAIR, so comparing `a.eql(a)` asks both sides a
+/// question they answer reflexively and cannot fail. This puts two different
+/// inputs in front of both implementations and compares the answers instead.
+/// The corpus holds pairs that differ as integers and agree as field elements
+/// (0 and p, 1 and p+1, 2p), which is where a differing reduction would show.
+fn cmpEql(a_in: u64, b_in: u64) void {
+    const m = mine.Goldilocks.fromU64(a_in).eql(mine.Goldilocks.fromU64(b_in));
+    const t = Theirs.fromInt(a_in).eql(Theirs.fromInt(b_in));
+    note("eql", m == t);
+    if (m != t) {
+        std.debug.print("    eql({d},{d}): mio {} · predef {}\n", .{ a_in, b_in, m, t });
+    }
 }
 
 pub fn main() !void {
@@ -147,6 +172,7 @@ pub fn main() !void {
             cmpBinary(a, b, "add");
             cmpBinary(a, b, "sub");
             cmpBinary(a, b, "mul");
+            cmpEql(a, b);
         }
         cmpBinary(a, 0, "neg");
         cmpInv(a);
@@ -156,6 +182,24 @@ pub fn main() !void {
         }
     }
 
+    std.debug.print("\ndesglose (contado por la herramienta, no a mano):\n", .{});
+    const Row = struct { name: []const u8, count: usize };
+    var rows: [64]Row = undefined;
+    var it = by_check.iterator();
+    var n: usize = 0;
+    while (it.next()) |e| {
+        rows[n] = .{ .name = e.key_ptr.*, .count = e.value_ptr.* };
+        n += 1;
+    }
+    std.mem.sort(Row, rows[0..n], {}, struct {
+        fn gt(_: void, a: Row, b: Row) bool {
+            return a.count > b.count;
+        }
+    }.gt);
+    for (rows[0..n]) |r| std.debug.print("  {d:>4}  {s}\n", .{ r.count, r.name });
+    var sum: usize = 0;
+    for (rows[0..n]) |r| sum += r.count;
+    std.debug.print("  {s:>26}  {d}\n", .{ "TOTAL (suma del desglose)", sum });
     std.debug.print("\ncomprobaciones: {d}\n", .{checks});
     std.debug.print("discrepancias: {d}\n", .{failures});
     if (failures == 0) {
