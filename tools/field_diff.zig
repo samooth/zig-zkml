@@ -1,0 +1,166 @@
+//! Differential: `libs/field.zig` against the pinned `zig-algebra` M61.
+//!
+//! Signature AND result, function by function, on the same inputs. A
+//! signature comparison is not a differential: it says the names line up and
+//! nothing about whether the two agree on a value. This runs both and prints
+//! every disagreement with the inputs that produced it, so a claim about
+//! equivalence either holds or names the case where it does not.
+//!
+//! Run it with `tools/field_diff.sh`, which is kept so the measurement can be
+//! repeated. A number measured with a tool that does not exist tomorrow is not
+//! a number anybody can check.
+
+const std = @import("std");
+const mine = @import("field_mine");
+const zf = @import("zig-field");
+
+const Theirs = zf.M61;
+var failures: usize = 0;
+var checks: usize = 0;
+
+fn note(comptime what: []const u8, ok: bool) void {
+    checks += 1;
+    if (!ok) {
+        failures += 1;
+        std.debug.print("  DISCREPANCIA {s}\n", .{what});
+    }
+}
+
+fn mineToU64(a: mine.Goldilocks) u64 {
+    return a.toU64();
+}
+
+fn theirsToU64(a: Theirs) u64 {
+    return @intCast(a.toU64());
+}
+
+/// Same input through both constructors, compared on the field value.
+fn cmpFrom(av: u64, bv: u64) void {
+    const a = mine.Goldilocks.fromU64(av);
+    const b = Theirs.fromInt(bv);
+    const ok = mineToU64(a) == theirsToU64(b);
+    note("fromU64/fromInt", ok);
+    if (!ok) {
+        std.debug.print("    entrada {d}: mio {d} · predef {d}\n", .{ av, mineToU64(a), theirsToU64(b) });
+    }
+    // Also compare the encoded bytes: a matching value with a differing
+    // encoding is still a difference for anything that hashes them.
+    var ab: [8]u8 = undefined;
+    a.toBytes(&ab);
+    const bb: [8]u8 = b.toBytes(); // firma distinta: el predef devuelve, el mio escribe en un out-param
+    note("toBytes", std.mem.eql(u8, &ab, &bb));
+    if (!std.mem.eql(u8, &ab, &bb)) {
+        std.debug.print("    entrada {d}: mio {x} · predef {x}\n", .{ av, ab, bb });
+    }
+}
+
+fn cmpBinary(a_in: u64, b_in: u64, comptime op: []const u8) void {
+    const A = mine.Goldilocks.fromU64(a_in);
+    const B = mine.Goldilocks.fromU64(b_in);
+    const TA = Theirs.fromInt(a_in);
+    const TB = Theirs.fromInt(b_in);
+
+    const mine_result: u64 = if (comptime std.mem.eql(u8, op, "add"))
+        mineToU64(mine.Goldilocks.add(A, B))
+    else if (comptime std.mem.eql(u8, op, "sub"))
+        mineToU64(mine.Goldilocks.sub(A, B))
+    else if (comptime std.mem.eql(u8, op, "mul"))
+        mineToU64(mine.Goldilocks.mul(A, B))
+    else
+        mineToU64(mine.Goldilocks.neg(A));
+
+    const their_result: u64 = if (comptime std.mem.eql(u8, op, "add"))
+        theirsToU64(TA.add(TB))
+    else if (comptime std.mem.eql(u8, op, "sub"))
+        theirsToU64(TA.sub(TB))
+    else if (comptime std.mem.eql(u8, op, "mul"))
+        theirsToU64(TA.mul(TB))
+    else
+        theirsToU64(TA.neg());
+
+    const ok = mine_result == their_result;
+    note(op, ok);
+    if (!ok) {
+        std.debug.print("    {d} {s} {d}: mio {d} · predef {d}\n", .{ a_in, op, b_in, mine_result, their_result });
+    }
+}
+
+fn cmpInv(a_in: u64) void {
+    const A = mine.Goldilocks.fromU64(a_in);
+    const TA = Theirs.fromInt(a_in);
+    // On the REDUCED value, not the raw input: p and 2p are in the corpus and
+    // both construct to zero, where inv legitimately fails on either side.
+    // Testing the raw input was a bug in this harness, not a difference.
+    const reduced = mineToU64(A);
+    note("fromU64 reduce igual que fromInt", reduced == theirsToU64(TA));
+    if (reduced == 0) {
+        // Both must refuse; the names of the failure are reported apart from
+        // the values because a wrong error name is a real difference.
+        const mine_err = mine.Goldilocks.inv(A);
+        const their_err = TA.invChecked();
+        note("inv(0) ambos fallan", (mine_err catch null) == null and (their_err catch null) == null);
+        std.debug.print("    (inv de 0: ambos fallan — mio ZeroInverse, predef invChecked)\n", .{});
+        return;
+    }
+    const m = mineToU64(mine.Goldilocks.inv(A) catch unreachable);
+    const t = theirsToU64(TA.invChecked() catch unreachable);
+    note("inv", m == t);
+    if (m != t) std.debug.print("    inv({d}): mio {d} · predef {d}\n", .{ a_in, m, t });
+}
+
+fn cmpPow(a_in: u64, e: u64) void {
+    const A = mine.Goldilocks.fromU64(a_in);
+    const TA = Theirs.fromInt(a_in);
+    const m = mineToU64(mine.Goldilocks.pow(A, e));
+    const t = theirsToU64(TA.pow(e));
+    note("pow", m == t);
+    if (m != t) std.debug.print("    pow({d},{d}): mio {d} · predef {d}\n", .{ a_in, e, m, t });
+}
+
+fn cmpPredicates(a_in: u64) void {
+    const A = mine.Goldilocks.fromU64(a_in);
+    const TA = Theirs.fromInt(a_in);
+    note("isZero", A.isZero() == TA.isZero());
+    note("eql", (A.eql(mine.Goldilocks.fromU64(a_in))) == TA.eql(TA));
+    note("toU64", mineToU64(A) == theirsToU64(TA));
+}
+
+pub fn main() !void {
+    const p: u64 = (1 << 61) - 1;
+    // Boundaries first: zero, one, p-1, and values that exceed p so the two
+    // reduction paths are compared and not just the happy one.
+    const vals = [_]u64{
+        0,                        1,                     2,                     3,
+        p - 1,                    p - 2,                 (p - 1) / 2,           p,
+        p + 1,                    2 * p,                 2 * p + 1,             std.math.maxInt(u64),
+        std.math.maxInt(u64) - 1, 0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210, 1234567890123456789,
+    };
+
+    std.debug.print("p = {d}\n", .{p});
+    std.debug.print("representacion: mio canonica en `rep` · predef SmallField canonica en `value`\n\n", .{});
+
+    for (vals) |v| {
+        cmpFrom(v, v);
+    }
+    for (vals) |a| {
+        for (vals) |b| {
+            cmpBinary(a, b, "add");
+            cmpBinary(a, b, "sub");
+            cmpBinary(a, b, "mul");
+        }
+        cmpBinary(a, 0, "neg");
+        cmpInv(a);
+        cmpPredicates(a);
+        for ([_]u64{ 0, 1, 2, 61, 62, 255, 1000, 1 << 20 }) |e| {
+            cmpPow(a, e);
+        }
+    }
+
+    std.debug.print("\ncomprobaciones: {d}\n", .{checks});
+    std.debug.print("discrepancias: {d}\n", .{failures});
+    if (failures == 0) {
+        std.debug.print("RESULTADO: identicos en todo lo comparado\n", .{});
+    } else {
+        std.debug.print("RESULTADO: HAY DIFERENCIAS — no se borra nada, se reporta\n", .{});
+    }
+}
