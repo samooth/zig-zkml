@@ -1,7 +1,42 @@
-debug.zig
-Io/Threaded.zig
-posix.zig
-process/Args.zig
-Thread.zig
-libs/fri/domain.zig
-libs/fri/root.zig
+# What still fails to compile for wasm32-freestanding, under `zig build test`.
+#
+# Scope: this is the TEST BUILD — the harness, everything it drags in, and the
+# repository code the harness reaches. It is NOT the consumer question. For
+# that see `zig build wasm-consumer`, which imports only the public C ABI and
+# is expected to pass.
+#
+# Data lines are bare paths. Everything else is a comment, and the gate ignores
+# comments, so this file can say what it contains and why.
+#
+# Categorised, because a file that was never supposed to compile does not belong
+# in a list of portability defects. Its presence meant every future fix moved
+# the list for a reason unrelated to portability, and a gate that cries wolf is
+# worse than no gate.
+#
+#   std/  — stdlib internals, not ours to fix
+#   repo/ — repository code, ours
+#
+Io/Threaded.zig      std/   getrandom, no syscall table entry
+posix.zig            std/   IOV_MAX, STDIN_FILENO
+process/Args.zig     std/   type 'void' does not support field access
+Thread.zig           std/   cannot spawn thread in single-threaded mode
+libs/fri/root.zig    repo/  u5 vs u6 shift width, x2 (lines 189, 407)
+#
+# Four of the five are the harness and std, which is the reason this file is
+# named for the test sweep rather than for wasm. One is repository code, and it
+# waits on the libs/fri decision: those two shifts are the same 32-bit defect
+# that `zig build wasm-consumer` no longer sees, and fixing them means either
+# two `@intCast`s or deleting the file.
+#
+# Entries that left this list, and why. A list that shrinks with no explanation
+# is a claim that moved on its own.
+#
+#   debug.zig           std/   left when libs/api.zig stopped using
+#                              std.heap.smp_allocator, which does not exist
+#                              without threads. That one line had blocked
+#                              wasm since the 27th.
+#   libs/fri/domain.zig repo/  left when size()'s `1 << log_n` became an
+#                              `@intCast` shift, and the bound it accepts
+#                              became a resource limit instead of the torus
+#                              order — which was a live bug on 64-bit, not only
+#                              a compile error on 32-bit.

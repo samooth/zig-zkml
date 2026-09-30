@@ -5,7 +5,7 @@
 # compiles" had no destination in it. This step supplies one. It does NOT
 # assert that wasm compiles — wasm does not, and pretending otherwise would
 # be a door that lies. It asserts the CURRENT failure, by file, against
-# tools/wasm_expected.txt.
+# tools/wasm_test_sweep_expected.txt.
 #
 # Two ways it can fail, and both mean the world moved:
 #   - the error set SHRINKS: something got fixed, so the list is stale
@@ -19,7 +19,7 @@ ZIG=${ZIG:-/home/t0m4s/.zvm/0.16.0/zig}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 TARGET=${1:-wasm32-freestanding}
 LOG="$ROOT/.zig-cache/wasm_portability.log"
-EXPECTED="$ROOT/tools/wasm_expected.txt"
+EXPECTED="$ROOT/tools/wasm_test_sweep_expected.txt"
 mkdir -p "$ROOT/.zig-cache"
 
 # El fallo ES lo esperado, asi que se invierte el codigo de salida.
@@ -28,7 +28,7 @@ set +e
 rc=$?
 set -e
 if [ "$rc" -eq 0 ]; then
-  echo "WASM: $TARGET COMPILA. La lista de tools/wasm_expected.txt esta vieja:" >&2
+  echo "WASM: $TARGET COMPILA. La lista de tools/wasm_test_sweep_expected.txt esta vieja:" >&2
   echo "  si se arreglo de verdad, borra el fichero y quita este gate;" >&2
   echo "  si no deberia compilar, este gate no describe el fallo real." >&2
   exit 1
@@ -42,7 +42,12 @@ fi
 got=$(grep -E '^[^ ].*\.zig:[0-9]+:[0-9]+: error:' "$LOG" \
       | grep -oE '^[^(:]*\.zig' \
       | sed -E 's|.*/lib/std/||; s|^'"$ROOT"'/||' | sort -u || true)
-want=$(sed -E 's|.*/lib/std/||; s|^'"$ROOT"'/||' "$EXPECTED" | sort -u)
+# El fichero esperado puede explicar cada entrada: se ignoran los comentarios
+# y se lee solo el primer campo de cada linea. Una lista que no puede decir por
+# que contiene lo que contiene es la mitad de una lista de tickets.
+want=$(grep -vE '^[[:space:]]*(#|$)' "$EXPECTED" \
+      | sed -E 's/[[:space:]].*$//' \
+      | sed -E 's|.*/lib/std/||; s|^'"$ROOT"'/||' | sort -u)
 
 if [ "$got" = "$want" ]; then
   n=$(printf '%s\n' "$want" | grep -c . )
@@ -67,7 +72,7 @@ echo "--- falla y NO estaba en la lista (problema nuevo, o lista incompleta) ---
 echo "--- estaba en la lista y DEJO de fallar (alguien lo arreglo) ---" >&2
 [ -n "$fixed" ] && printf '%s\n' "$fixed" | sed 's/^/  /' >&2 || echo "  (ninguno)" >&2
 echo >&2
-echo "Si algo DEJO de fallar, actualiza tools/wasm_expected.txt en el MISMO" >&2
+echo "Si algo DEJO de fallar, actualiza tools/wasm_test_sweep_expected.txt en el MISMO" >&2
 echo "commit que lo arreglo, y el mensaje dice que salio y por que. Una" >&2
 echo "lista que cambia de nueve a ocho sin explicacion es una afirmacion" >&2
 echo "que se ha movido sola." >&2

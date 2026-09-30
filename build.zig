@@ -199,9 +199,59 @@ pub fn build(b: *std.Build) void {
     // tools/wasm_expected.txt. It does not assert that wasm compiles — it
     // does not. Fix a file and this goes red instead of silently
     // contradicting the list.
+    // --- the consumer question, asked of a consumer ------------------------
+    //
+    // `zig build` runs for one target and the gates all pass, so "this
+    // compiles" had no destination in it. The first attempt supplied one by
+    // pinning every file that failed under `zig build test -Dtarget=wasm32-
+    // freestanding` (tools/wasm_portability.sh) — and that list mixed std
+    // internals, repository code, and the test harness, which takes
+    // std.process.Init and spawns threads and can never compile freestanding
+    // for any reason connected to this library. The harness in the list
+    // meant every future fix moved the list for an unrelated reason.
+    //
+    // So there are two steps with two honest names. This one asks a CONSUMER:
+    // the shim imports the public C-ABI surface only, which is what an
+    // embedder does, so the answer is a yes or a no.
+    //
+    // The shim builds as an object for a freestanding target on purpose: it
+    // is never executed, only compiled, so no test runner is involved — and a
+    // test runner is precisely what must stay out of this question.
+    const wasm_consumer = b.addObject(.{
+        .name = "wasm_consumer_shim",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/wasm_consumer_shim.zig"),
+            .target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding }),
+            .optimize = .ReleaseSafe,
+            .imports = &.{
+                .{ .name = "api", .module = b.createModule(.{
+                    .root_source_file = b.path("libs/api.zig"),
+                    .target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding }),
+                    .optimize = .ReleaseSafe,
+                    .imports = &.{
+                        .{ .name = "zig-merkle", .module = zmerkle_mod },
+                    },
+                }) },
+            },
+        }),
+    });
+    const wasm_consumer_step = b.step(
+        "wasm-consumer",
+        "Can a consumer of the public C ABI compile for wasm32-freestanding?",
+    );
+    wasm_consumer_step.dependOn(&wasm_consumer.step);
+
+    // The test-build sweep, named for what it actually is. This is the
+    // inventory, and it is honest about its scope: it is the test harness and
+    // everything it pulls in, pinned. The file name says so too, because a
+    // list called wasm_expected.txt that contains std internals lies about
+    // its own reach.
     const wasm_portability = b.addSystemCommand(&.{ "bash", "tools/wasm_portability.sh" });
     wasm_portability.step.dependOn(b.getInstallStep());
-    const wasm_step = b.step("wasm-portability", "Pinned wasm32-freestanding failure: what does NOT compile, by file");
+    const wasm_step = b.step(
+        "wasm-test-sweep",
+        "Pinned wasm32-freestanding failures of the TEST BUILD (harness + repo + std)",
+    );
     wasm_step.dependOn(&wasm_portability.step);
 
     // bench/fingerprint_bench.zig measures the claim arithmetic that the
