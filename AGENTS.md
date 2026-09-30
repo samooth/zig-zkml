@@ -276,6 +276,15 @@ compares `A.eql(A)` against `TA.eql(TA)` is well formed and passes forever, and
 a measurement of the base field's criterion labelled as the extension's is a
 true number about the wrong thing. Both are "the object goes inside the data".
 
+**And the sister rule, which is about order rather than about the object:
+normalise before you compare, and compare the same object on both sides.** A
+gate listing nine files failed while both lists held the same nine: one side
+was sorted before the `/home/.../lib/std/` prefix was stripped and the other
+after, and stripping it changes the collation of the capitalised names. Two
+legitimate counts, different numbers, and no assertion on the result sees it —
+it is the 8-bytes-against-16 shape again. The failure is not *what* you compare
+but *after what* you compare it, which is why no grep finds it.
+
 The operational form of all three is the same: mutate the thing on purpose and
 confirm the instrument notices. Every number in this repository that claims to
 be measured has a mutation behind it, or it does not get to say it is.

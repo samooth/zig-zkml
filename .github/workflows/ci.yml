@@ -13,6 +13,13 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+  schedule:
+    # El gate de portabilidad cuesta un `zig build test` entero para un segundo
+    # destino, asi que no va en cada push. Va aqui, programado, y NO bloquea:
+    # informa, y cuando alguien arregle uno de los ficheros fijados la lista
+    # se queda vieja y este job lo dice. Un job que corre y falla sin bloquear
+    # sigue siendo una puerta; un protocolo sin fecha no es nada.
+    - cron: "23 6 * * 1"
 
 permissions:
   contents: read
@@ -110,3 +117,17 @@ jobs:
           # raising the floor is deliberate, but shrinking it is a regression.
           zig build test --summary all 2>&1 | tee /tmp/summary.txt
           grep -Eq '2[0-9]{2}/2[0-9]{2} tests passed' /tmp/summary.txt
+
+  # NO bloqueante a proposito. El gate de portabilidad afirma que
+  # wasm32-freestanding NO compila, contra tools/wasm_expected.txt. Si este job
+  # se pone rojo, el conjunto de errores cambio: alguien arreglo algo, o
+  # aparecio un problema nuevo. El detalle esta en la salida del job.
+  wasm-portability:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - run: bash tools/wasm_portability.sh

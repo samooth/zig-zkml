@@ -56,8 +56,19 @@ echo "--- esperado ($(printf '%s\n' "$want" | grep -c . ) ficheros) ---" >&2
 printf '%s\n' "$want" | sed 's/^/  /' >&2
 echo "--- obtained ($(printf '%s\n' "$got" | grep -c . ) ficheros) ---" >&2
 printf '%s\n' "$got" | sed 's/^/  /' >&2
-echo "--- solo en lo obtenido (nuevo, o arreglado) ---" >&2
-comm -13 <(printf '%s\n' "$want") <(printf '%s\n' "$got") 2>/dev/null | sed 's/^/  /' >&2
-echo "--- solo en lo esperado (dejo de fallar) ---" >&2
-comm -23 <(printf '%s\n' "$want") <(printf '%s\n' "$got") 2>/dev/null | sed 's/^/  /' >&2
+# Las dos direcciones significan cosas DISTINTAS y hay que nombrarlas bien.
+# "Falla y no estaba en la lista" NO es "nuevo": tambien es "la lista esta
+# incompleta", y con la etiqueta equivocada invita a regenerar la lista sin
+# mirar, que es la version silenciosa de mover la cifra para que la puerta pase.
+extra=$(comm -13 <(printf '%s\n' "$want") <(printf '%s\n' "$got"))
+fixed=$(comm -23 <(printf '%s\n' "$want") <(printf '%s\n' "$got"))
+echo "--- falla y NO estaba en la lista (problema nuevo, o lista incompleta) ---" >&2
+[ -n "$extra" ] && printf '%s\n' "$extra" | sed 's/^/  /' >&2 || echo "  (ninguno)" >&2
+echo "--- estaba en la lista y DEJO de fallar (alguien lo arreglo) ---" >&2
+[ -n "$fixed" ] && printf '%s\n' "$fixed" | sed 's/^/  /' >&2 || echo "  (ninguno)" >&2
+echo >&2
+echo "Si algo DEJO de fallar, actualiza tools/wasm_expected.txt en el MISMO" >&2
+echo "commit que lo arreglo, y el mensaje dice que salio y por que. Una" >&2
+echo "lista que cambia de nueve a ocho sin explicacion es una afirmacion" >&2
+echo "que se ha movido sola." >&2
 exit 1
