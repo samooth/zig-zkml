@@ -254,6 +254,23 @@ The same shape as the test count: a copy of a checkable fact elsewhere
 desynchronises, and the only cure is that nobody reads it without refreshing it.
 That is why the test count left the README.
 
+### Uncommitted on purpose: `tools/fri_diff.{zig,sh}`
+
+They are **deliberately uncommitted**, and that is a decision, not an oversight.
+They are the differential that turns the `libs/fri` decision — 614 lines, own
+FRI versus the `zig-algebra` pin — from an opinion into a measurement.
+
+They are uncommitted because they did not run: on `zig-algebra` v0.5.2 the
+pin's two domain paths never terminate at `log_n = 8`, so the harness hangs.
+**A harness that hangs is not a result, and committing one would be the inert
+door this file keeps warning about.** Both bounds were fixed upstream in
+v0.6.0 (`extension.zig:31 MAX_NON_RESIDUE_SEARCH = 1024`,
+`torus.zig:181 max_candidates = 1 << 20`), so they become committable the
+moment they actually produce a number.
+
+Do not `git clean` them away. They are the instrument that decides it, and a
+deleted instrument converts a measurement back into a judgement call.
+
 ### A conclusion travels; the tree it came from does not
 
 **Before carrying a conclusion from one repository to another, check that the

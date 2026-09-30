@@ -58,6 +58,20 @@ const FriTranscript = struct {
             if (F.fromBytes(c[0..F.NUM_BYTES])) |v| return v else |_| {}
         }
     }
+
+    /// El pin, en v0.6.0, movio los dos puntos de llamada de
+    /// `challengeField` a `challengeFieldChecked`: son dos entradas por
+    /// decodificadores distintos —uno reduce, el otro rechaza— y su propio
+    /// test trae un KAT para probar que la SECUENCIA de retos no cambia.
+    ///
+    /// Aqui solo hay un decodificador, y ya es el checked: `challengeField`
+    /// usa `fromBytes`, que rechaza en vez de reducir. Asi que las dos
+    /// entradas coinciden por construccion. No es que las haya hecho
+    /// iguales: es que nunca las tuve distintas, y decirlo evita que alguien
+    /// lea "identicas" como una equivalencia que hubo que demostrar.
+    pub fn challengeFieldChecked(self: *FriTranscript, comptime F: type) F {
+        return self.challengeField(F);
+    }
 };
 
 pub fn main() !void {
