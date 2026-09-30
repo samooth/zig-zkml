@@ -276,14 +276,33 @@ compares `A.eql(A)` against `TA.eql(TA)` is well formed and passes forever, and
 a measurement of the base field's criterion labelled as the extension's is a
 true number about the wrong thing. Both are "the object goes inside the data".
 
-**And the sister rule, which is about order rather than about the object:
-normalise before you compare, and compare the same object on both sides.** A
-gate listing nine files failed while both lists held the same nine: one side
-was sorted before the `/home/.../lib/std/` prefix was stripped and the other
-after, and stripping it changes the collation of the capitalised names. Two
-legitimate counts, different numbers, and no assertion on the result sees it —
-it is the 8-bytes-against-16 shape again. The failure is not *what* you compare
-but *after what* you compare it, which is why no grep finds it.
+**And the sister rule: normalise before you compare, compare the same object
+on both sides, and name each outcome for what it means.** Both halves are
+failures of the report rather than of the check, and both were found today in
+the same gate.
+
+*The order half.* A gate listing nine files failed while both lists held the
+same nine: one side was sorted before the `/home/.../lib/std/` prefix was
+stripped and the other after, and stripping it changes the collation of the
+capitalised names. Two legitimate counts, different numbers, and no assertion
+on the result sees it — it is the 8-bytes-against-16 shape again. The failure
+is not *what* you compare but *after what* you compare it, which is why no
+grep finds it.
+
+*The naming half, which is the worse of the two.* The same gate's two output
+sections were computed correctly and then labelled wrongly: a file that was
+**still failing** and had merely been dropped from the expected list was
+headed *"nuevo, o arreglado"*. Neither. And that label invites regenerating the
+list without looking, which is moving the figure so the door stops complaining
+— the silent version of everything above. **A label that misdescribes its own
+output changes what you do with it, and that is worse than a broken gate,
+because a broken gate is visible.**
+
+Which is why the list is a contract: a file leaves `tools/wasm_expected.txt`
+in the same commit that fixes it, and that commit says which file left and
+why. A list that goes from nine to eight with no explanation is a claim that
+moved on its own. The rule exists so that "move the list" stops being a
+judgement call and becomes a procedure.
 
 The operational form of all three is the same: mutate the thing on purpose and
 confirm the instrument notices. Every number in this repository that claims to
