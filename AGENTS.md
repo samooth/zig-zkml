@@ -250,6 +250,24 @@ The same shape as the test count: a copy of a checkable fact elsewhere
 desynchronises, and the only cure is that nobody reads it without refreshing it.
 That is why the test count left the README.
 
+### A conclusion travels; the tree it came from does not
+
+**Before carrying a conclusion from one repository to another, check that the
+file, the path and the revision exist in the destination.** A `file:line` is
+not a location — it is a position in a tree, and it only means anything next
+to the tree it was read from.
+
+The ninth time this bit was distinct from the other eight. In those, an
+instrument was asked the wrong question and returned a coherent zero. This
+one the data belonged to one repository and the question to another: the
+*conclusion* travels, and the tree it was measured in does not. `FieldTooSmall`
+in three different repositories, a `stark.zig` that exists in none of them, and
+`B.2.12` as an appendix — none of those were checked against the tree they
+were being asserted about, and all of them read as findings.
+
+This is the rule that makes the rest a system rather than nine anecdotes. It
+costs one `ls` and it is the cheapest thing in this file.
+
 ### Every localised claim carries its subject
 
 A report's `valid at` is a condition; this is the same requirement applied to
