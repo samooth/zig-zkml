@@ -18,6 +18,7 @@
 //!       finalize/destroy) — additive, v1 functions unchanged.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const merkle = @import("merkle.zig");
 const transcript = @import("transcript.zig");
 const trace = @import("trace/root.zig");
@@ -67,7 +68,18 @@ pub const ZKML_Attestor = struct {
 /// Stable process-wide allocator returned to C callers who have no Zig
 /// allocator of their own (llama.cpp wrapper, vLLM ctypes, ...). Pass the
 /// result to any `*_create` entry (B1: captured; never free it).
-var process_allocator: std.mem.Allocator = std.heap.smp_allocator;
+///
+/// `smp_allocator` needs threads, and a freestanding target has none, so it
+/// does not exist there — `std/Thread.zig:493`, "Unsupported operating system
+/// freestanding". That is not a hypothetical: it is what stopped a web
+/// embedder from building this library for wasm32, and the line sat untouched
+/// from the 27th while twelve commits of tests and documentation landed on top
+/// of it. `single_threaded` is the target's own answer to the question, so ask
+/// it rather than inferring from the OS.
+var process_allocator: std.mem.Allocator = if (builtin.single_threaded)
+    std.heap.page_allocator
+else
+    std.heap.smp_allocator;
 
 pub export fn zkml_allocator_process() *anyopaque {
     return &process_allocator;
