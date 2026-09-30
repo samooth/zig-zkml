@@ -1,0 +1,9 @@
+debug.zig
+Io/Threaded.zig
+posix.zig
+process/Args.zig
+Thread.zig
+libs/fri/domain.zig
+libs/fri/root.zig
+libs/prove/root.zig
+libs/stark/root.zig

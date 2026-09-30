@@ -197,11 +197,24 @@ zig build spike
 zig build vllm-adapter
 ```
 
-**Seventh, and it is local only:**
+**Two more run here and are local only, because both shell out to a full
+second build:**
 
 ```sh
 zig build bench-fingerprint
+zig build wasm-portability
 ```
+
+`wasm-portability` asserts that **`wasm32-freestanding` does not compile**,
+against the file list in `tools/wasm_expected.txt`. It does not assert that
+wasm works — it does not. `build.zig` has had `b.standardTargetOptions` all
+along, so `-Dtarget=wasm32-freestanding` was always available and never
+exercised: the seven gates all pass on one destination, and "this compiles"
+had no destination in it. Fix one of the pinned files and the gate goes red
+rather than silently contradicting the list. The four repo-side entries are
+a 32-bit `usize` shift-width defect (`@as(usize, 1) << log_n` with
+`log_n: u6` needs `u5` of shift on wasm32 and `u6` on native), which is
+neither the `posix` gap nor `smp_allocator`.
 
 `bench-fingerprint` is a real gate and it does run here, but `.github/workflows/ci.yml`
 never calls it — `grep -c bench-fingerprint .github/workflows/ci.yml` is 0. It is

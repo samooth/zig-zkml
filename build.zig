@@ -193,6 +193,17 @@ pub fn build(b: *std.Build) void {
     const bench_step = b.step("bench", "F2 bench: prover/verifier cost per GEMM layout (ReleaseFast)");
     bench_step.dependOn(&run_bench.step);
 
+    // Local gate, NOT in CI: it shells out to a full `zig build test` for a
+    // second target, so it costs a full build to run. It asserts that
+    // wasm32-freestanding FAILS to compile, against the file list pinned in
+    // tools/wasm_expected.txt. It does not assert that wasm compiles — it
+    // does not. Fix a file and this goes red instead of silently
+    // contradicting the list.
+    const wasm_portability = b.addSystemCommand(&.{ "bash", "tools/wasm_portability.sh" });
+    wasm_portability.step.dependOn(b.getInstallStep());
+    const wasm_step = b.step("wasm-portability", "Pinned wasm32-freestanding failure: what does NOT compile, by file");
+    wasm_step.dependOn(&wasm_portability.step);
+
     // bench/fingerprint_bench.zig measures the claim arithmetic that the
     // fingerprint identity replaces: the oracle that forms the product
     // against the factored form, on the same inputs. Same rule as above — its
