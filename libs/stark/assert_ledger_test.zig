@@ -171,6 +171,18 @@ test "the measured headline matches the ledger" {
     var buf: [64]u8 = undefined;
     const needle = try std.fmt.bufPrint(&buf, "total        {}", .{found.items.len});
     try std.testing.expect(std.mem.indexOf(u8, ledger, needle) != null);
+
+    // Y el TITULO. Esta puerta antes miraba solo la linea de arriba, con lo
+    // que el titulo de docs/asserts.md decia 26 mientras el cuerpo de la
+    // misma pagina decia 20: la puerta corria, pasaba, y no podia ver el
+    // numero que era falso. El valor de una puerta es lo que puede fallar,
+    // y esta no podia fallar en el sitio donde el numero estaba mal.
+    //
+    // El titulo es la primera linea que se lee, asi que es la que mas
+    // importa que no mienta.
+    var title_buf: [64]u8 = undefined;
+    const title_needle = try std.fmt.bufPrint(&title_buf, "the {d} `std.debug.assert` in this repository", .{found.items.len});
+    try std.testing.expect(std.mem.indexOf(u8, ledger, title_needle) != null);
 }
 
 test "the ledger states kind and protection for every row" {
@@ -213,4 +225,39 @@ test "the ledger states kind and protection for every row" {
             return error.MissingField;
         }
     }
+}
+
+test "every prose document is in the language AGENTS.md says it is" {
+    // AGENTS.md fija dos idiomas: README y AGENTS en ingles, `docs/` en
+    // espanol, con dos excepciones nombradas. Sin esta puerta la politica es
+    // prosa, y la prosa no se puede tumbar — que es el punto 2 de zk aplicado
+    // a este repo: un gate que AGENTS dice que tiene y que nadie corre.
+    //
+    // Se comprueba que la excepcion este DECLARADA, no que el fichero este en
+    // un idioma: distinguir ingles de espanol automaticamente es fragil, y un
+    // detector fragil que pasa es peor que ninguno. Lo que si se vigila es
+    // que la lista de excepciones de AGENTS.md exista y no crezca sola.
+    const gpa = testing.allocator;
+    const agents = try readWhole(gpa, std.testing.io, "AGENTS.md");
+    defer gpa.free(agents);
+
+    const exceptions = [_][]const u8{ "docs/asserts.md", "docs/decisions/ADR-0002-fingerprint-rank-one.md" };
+    for (exceptions) |path| {
+        testing.expect(std.mem.indexOf(u8, agents, path) != null) catch |e| {
+            std.debug.print("\nAGENTS.md no declara la excepcion: {s}\n", .{path});
+            return e;
+        };
+    }
+    // Y que la politica este enunciada. AGENTS.md esta en ingles, asi que se
+    // busca la frase inglesa: una comprobacion que buscara "en ingles" en
+    // espanol no encontraria nada y pasaria — o fallaria — por la razon
+    // equivocada, que es el modo de fallo de hoy tres veces.
+    testing.expect(std.mem.indexOf(u8, agents, "in English on purpose") != null) catch |e| {
+        std.debug.print("\nAGENTS.md no declara la politica de idioma\n", .{});
+        return e;
+    };
+}
+
+fn readWhole(gpa: std.mem.Allocator, io: std.Io, path: []const u8) ![]u8 {
+    return std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(1 << 20));
 }

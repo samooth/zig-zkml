@@ -1,4 +1,4 @@
-# Assert ledger — the 26 `std.debug.assert` in this repository
+# Assert ledger — the 20 `std.debug.assert` in this repository
 
 (The test that checks this file, `libs/stark/assert_ledger_test.zig`, is itself
 excluded: it mentions `std.debug.assert` in prose, and counting it would make

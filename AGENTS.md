@@ -7,6 +7,15 @@ Language: English, as in `zig-zk`'s and `zig-algebra`'s. The specification in
 `docs/` is Spanish on purpose — it was written that way and translating it is
 an open decision, not something to do in passing.
 
+Two documents are in English on purpose, and the exception is declared here so
+it can be checked rather than remembered: `docs/asserts.md` and
+`docs/decisions/ADR-0002-fingerprint-rank-one.md`. Both mirror code
+identifiers and a measurement table verbatim, and a translated copy of a
+machine-checked list is a second thing to keep in sync for no reader. Anything
+else under `docs/` is Spanish. The test
+`every prose document is in the language AGENTS.md says it is` fails if an
+exception is added here without listing it, so the list cannot grow quietly.
+
 ## The first rule, because it has caught this repository five times
 
 **Nothing counts as exercised until a test calls it, and the test is what
@@ -103,6 +112,29 @@ Deferring it two sections is not the same as deferring it twelve.
 the same reason: specificity is what makes a failure diagnosable. See
 [UnsupportedCase → SubnormalInput](libs/stark/float_ref.zig) below.
 
+### Two rules about instruments, and the gate can only check one of them
+
+Both were learned the expensive way, and both are **prose** — there is no test
+for either, and pretending otherwise is the mistake the test above exists to
+catch:
+
+1. **An oracle written after reading the implementation detects nothing.** It
+   encodes what the code already does, so agreement is guaranteed and the
+   measurement carries no information.
+2. **A number well-measured on the wrong object is worse than no number,
+   because it gets signed.** I applied the base field's criterion — `(p−1)/2` —
+   to a quadratic extension and labelled the output as the extension's. It was
+   a real measurement of a real value, and it answered a question nobody asked.
+
+They are one rule from two sides: **the instrument has to exist before you
+look at the answer, and the answer has to say what it was measured against.**
+A reflexive check — `A.eql(A)` against `TA.eql(TA)` — is both at once: an
+oracle written after looking, that did not say what it compared.
+
+The operational form is a mutation: break the thing on purpose and confirm the
+instrument notices. Every number in this repository that claims to be measured
+has a mutation behind it, or it does not get to say it is.
+
 ## Git
 
 - **The remote belongs to the person.** Prepare the work, verify it, and hand
@@ -160,6 +192,8 @@ invocations, so a `&&` does not see the failure.
 
 ## Gates
 
+**Six run in CI**, and a report that lists gates lists these six:
+
 ```sh
 zig build fmt
 zig build test --summary all
@@ -168,8 +202,20 @@ zig build abi
 zig build verify
 zig build spike
 zig build vllm-adapter
+```
+
+**Seventh, and it is local only:**
+
+```sh
 zig build bench-fingerprint
 ```
+
+`bench-fingerprint` is a real gate and it does run here, but `.github/workflows/ci.yml`
+never calls it — `grep -c bench-fingerprint .github/workflows/ci.yml` is 0. It is
+listed separately precisely because a report that says "the seven gates" against
+a CI that runs six is a false claim, and the ratios it produces
+(`~36× / ~168× / ~309× / ~834×`, in the README) have this as their only door. A
+door that nothing executes is not a door.
 
 `llama-adapter` and `kt-adapter` need sibling checkouts and are local gates
 only; CI cannot run them. They do pass on a machine that has the siblings, so

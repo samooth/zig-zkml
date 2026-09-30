@@ -56,7 +56,7 @@ L3  Compilador de modelo         CircuitGraph → AirGraph (columnas, grados,
 L2  Gadgets zkML   ◄── EL GAP    QuantTensor, gemm, dequant/requant, swiglu,
        │                          layernorm, routing (top-k), lookups
        │
-L1  Proof systems  (zig-zk)      STARK+LogUp, AIR, transcript, sumcheck,
+L1  Proof systems  (propio)      STARK+LogUp, AIR, transcript, sumcheck,
        │                          tower/Binius (F4+), recursion Poseidon2
        │
 L0  Álgebra        (zig-algebra) Goldilocks, hash (Blake3/Poseidon), merkle,
@@ -260,7 +260,7 @@ Nunca constraints polinomiales de alto grado.
 
 ### 5.1 Composición L2→L1: `AirGraph`
 
-Interfaz formal entre el compilador L3 y zig-zk L1. Un `AirGraph` es:
+Interfaz formal entre el compilador L3 y la capa L1 (propia). Un `AirGraph` es:
 
 - **Columnas** con rol (`public` / `advice` / `fixed`), ancho en bits y cota.
 - **Constraints**: polinomios de grado ≤ 3 sobre columnas, como AST o lista
@@ -739,7 +739,7 @@ recalibran con el bench de F2. Los números duros de go/no-go están en §11.
 | **F4** | recursion multi-bloque sobre el statement fingerprint. **Núcleo aritmético HECHO** (`libs/stark/fingerprint.zig`): la identidad ⟨u⊗v, C⟩ = Σ_t ⟨u, A_·t⟩·⟨v, B_·t⟩ verificada contra un oráculo que forma el producto; O((m+n)k) frente a O(mnk). **Orden de compromiso HECHO** (`libs/stark/fingerprint_bind.zig`): u y v se derivan del transcript **después** de absorber ambos roots, con dominios separados y rechazo del vector nulo. **Coste medido** (`zig build bench-fingerprint`): 36×/168×/309× más rápido que el oráculo en 64×96×128, 256×384×512 y 512×704×1024, contra 38×/154×/296× predichos por el modelo — el modelo y la medición concuerdan. Falta: AIR con FRI y agregación entre tiles; Groth16 wrap solo si on-chain | el **sumcheck v2 sube a CAMINO CRÍTICO** (ROADMAP S3): sin él, probar una capa 2048×1408 por elemento de salida cuesta **23 días** en el layout de 1 MAC/fila y **10 días** en el chunked (2,88 M de MACs × 338/142 µs por elemento × 2048 filas, derivado de `zig build bench`), y el AIR float (158-394 constraints por operación según el formato) encarece cada elemento | overhead GEMM < 50x; decisión de producto |
 
 Las dependencias se fijan por tag y hash de paquete (`build.zig.zon`), no por
-rama: `zig-algebra` está en `#v0.3.2` y `zig-zk` declarado. Cuando una de ellas
+rama: `zig-algebra` está en `v0.5.2` y `zig-zk` **no** está declarado. Cuando una de ellas
 publica un tag incompatible se prefiere un fork propio sobre mezclar versiones.
 
 ## 12. Riesgos y mitigaciones
