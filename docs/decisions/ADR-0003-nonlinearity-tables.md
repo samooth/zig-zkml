@@ -82,7 +82,7 @@ verificaría. No es caro, es inviable.
   transcripción directa de la aritmética, sin sistema de constraints, y es lo
   que un AIR futuro se prueba. Sus stubs anteriores emitían una constraint
   `degree = 1` sin expresión, que es una falsificación y no un gadget; ahora
-  `airFragment` falla a compilar con los requisitos en la cabecera.
+  `airFragment` devuelve `error.NotImplemented` (`libs/gadgets/norm/root.zig`), que se puede llamar y responde. La diferencia importa en un ADR: *falla a compilar* expulsa a quien intente usarlo; *devuelve un error* le dice que falta la implementación. La firma es `NotImplemented!air.Fragment`, así que el nombre del error va en el tipo.
 - **La tabla `rsqrt` tuvo dos errores de diseño que la referencia cazó**, y
   ninguno lo habría visto un test de forma: el dominio cubría `1/sqrt(v)` para
   `v` en `[0, 255]` cuando la media de cuadrados de un int8 llega a 16129, y

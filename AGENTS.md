@@ -112,28 +112,21 @@ Deferring it two sections is not the same as deferring it twelve.
 the same reason: specificity is what makes a failure diagnosable. See
 [UnsupportedCase → SubnormalInput](libs/stark/float_ref.zig) below.
 
-### Two rules about instruments, and the gate can only check one of them
+### The instrument has to exist before you look at the answer
 
-Both were learned the expensive way, and both are **prose** — there is no test
-for either, and pretending otherwise is the mistake the test above exists to
-catch:
+**An oracle written after reading the implementation detects nothing.** It
+encodes what the code already does, so agreement is guaranteed and the
+measurement carries no information.
 
-1. **An oracle written after reading the implementation detects nothing.** It
-   encodes what the code already does, so agreement is guaranteed and the
-   measurement carries no information.
-2. **A number well-measured on the wrong object is worse than no number,
-   because it gets signed.** I applied the base field's criterion — `(p−1)/2` —
-   to a quadratic extension and labelled the output as the extension's. It was
-   a real measurement of a real value, and it answered a question nobody asked.
-
-They are one rule from two sides: **the instrument has to exist before you
-look at the answer, and the answer has to say what it was measured against.**
-A reflexive check — `A.eql(A)` against `TA.eql(TA)` — is both at once: an
-oracle written after looking, that did not say what it compared.
-
-The operational form is a mutation: break the thing on purpose and confirm the
-instrument notices. Every number in this repository that claims to be measured
-has a mutation behind it, or it does not get to say it is.
+This is the mutation half of the rule above, and it is **prose** — there is no
+test for it, and pretending otherwise is the mistake the test above exists to
+catch. The three from one day: an `eql` check that compared `A.eql(A)` with
+`TA.eql(TA)` and so compared yes to yes; a `grep` of a field's criterion that
+measured the base field and labelled the output as the extension's; and a
+`print` announcing that a find-and-replace had run, with no `assert` that the
+pattern had matched. The first two are the object inside the data, covered
+above. The third is a number reported without being measured, which is the
+same shape one level down.
 
 ## Git
 
@@ -243,6 +236,42 @@ changed because the other repository moved. That asymmetry is the whole cause.
 The same shape as the test count: a copy of a checkable fact elsewhere
 desynchronises, and the only cure is that nobody reads it without refreshing it.
 That is why the test count left the README.
+
+### Every localised claim carries its subject
+
+A report's `valid at` is a condition; this is the same requirement applied to
+each individual claim inside it. **Every localised claim — a number, a line, a
+file — names the revision it was checked against, or it has not been checked.**
+A citation without its SHA is a postal address, not a citation: it points at a
+possible place.
+
+Two from one day, and they are the same defect in both directions:
+
+- `docs/asserts.md` said `the 26` in the title and `total 20` in the body of
+  the same page. True at one revision, false at the next.
+- A report cited `AGENTS.md:171` for a defect. At `origin/main` line 171 was
+  `zig build bench-fingerprint`; after a commit added 46 lines above it, line
+  171 was something else. **The citation was right and expired when I wrote
+  over it** — which is the same failure, because a claim without its subject is
+  not a claim.
+
+What expires is not the figure, it is the revision it was checked against. That
+is why the SHA goes in the citation and not in the conclusion.
+
+The other half is the *object* being wrong rather than missing: an oracle that
+compares `A.eql(A)` against `TA.eql(TA)` is well formed and passes forever, and
+a measurement of the base field's criterion labelled as the extension's is a
+true number about the wrong thing. Both are "the object goes inside the data".
+
+The operational form of all three is the same: mutate the thing on purpose and
+confirm the instrument notices. Every number in this repository that claims to
+be measured has a mutation behind it, or it does not get to say it is.
+
+**These are prose, and this section says so deliberately.** There is no test
+that can check whether a citation carries its SHA — that would mean parsing
+prose, and a prose parser that passes is worse than none. That is the same
+argument as the language policy, and it is the reason a written rule is not a
+gate.
 
 ### A pin bump changes a signature — re-read the errors
 
