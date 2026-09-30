@@ -22,6 +22,22 @@ pub const Goldilocks = fp2.Goldilocks;
 /// The 2-adicity of the torus: p + 1 = 2^61.
 pub const torus_log_order: u6 = 61;
 
+/// Largest domain this library will build, as log2 of the element count.
+///
+/// This is a **resource limit, not a soundness parameter**: nothing about the
+/// protocol requires a larger domain, and a caller cannot widen it. It is
+/// deliberately not `torus_log_order`. Those are two different questions and
+/// conflating them is what made `size()` a live bug — `init` accepted any
+/// `log_n` up to 61 because that is where the generator stays valid, and then
+/// `size()` computed `1 << 61`, which fits a 64-bit `usize` and asks for 2.6e18
+/// bytes. It compiled, passed every check, and detonated on first use.
+///
+/// 2^30 domain points is above any single AIR trace; beyond that the trace
+/// needs blocking regardless of the torus. It is also below
+/// `@bitSizeOf(usize) - 1` on every supported target, so the shift in `size()`
+/// is representable on 32-bit `usize` as well as 64-bit.
+pub const max_log_domain: u6 = 30;
+
 /// Generator of the order-2^61 torus, found at comptime by trial:
 /// x^(p-1) for small x until order exactly 2^61 holds (g^(2^60) = -1).
 pub const generator: Fp2 = findGenerator();
@@ -75,25 +91,38 @@ pub const Domain = struct {
     /// g_k: order-2^log_n generator (H_k = <g_k>).
     step_gen: Fp2,
 
-    /// `error.DomainTooLarge` when `log_n` exceeds the torus order. This was a
-    /// pre-condition assertion, and removing it was not a formality: `log_n`
-    /// is a `u6` from the prover config, so a value above 61 makes
-    /// `torus_log_order - log_n` underflow, and in ReleaseFast the
-    /// subtraction wraps and `pow2` returns a generator of the wrong order
-    /// with no diagnostic. `zig_algebra` v0.5.1 hit the same defect in its own
-    /// `Domain.init` and fixed it the same way; this is that fix, kept in
-    /// step with upstream rather than diverged from it.
+    /// `error.DomainTooLarge` when `log_n` exceeds `max_log_domain`.
+    ///
+    /// This was a pre-condition assertion, and replacing it was not a
+    /// formality: `log_n` is a `u6` that reaches this function from outside —
+    /// `libs/fri/root.zig` reads it out of the prover config and out of the
+    /// proof — so a value above 61 makes `torus_log_order - log_n` underflow,
+    /// and in ReleaseFast the subtraction wraps and `pow2` returns a generator
+    /// of the wrong order with no diagnostic. `zig_algebra` v0.5.1 hit the same
+    /// defect in its own `Domain.init` and fixed it the same way.
+    ///
+    /// The bound is `max_log_domain` and not `torus_log_order`, because the
+    /// underflow and the allocation are separate limits and a guard that only
+    /// checks the first leaves `size()` returning 2^61. See `max_log_domain`.
     pub fn init(log_n: u6) error{DomainTooLarge}!Domain {
         // log_n = 0 is the trivial subgroup {1} (valid fold target).
-        if (log_n > torus_log_order) return error.DomainTooLarge;
+        if (log_n > max_log_domain) return error.DomainTooLarge;
         return .{
             .log_n = log_n,
             .step_gen = generator.pow(pow2(torus_log_order - @as(u32, log_n))),
         };
     }
 
+    /// `1 << log_n`, for the `log_n` that `init` accepted.
+    ///
+    /// The shift amount is `@intCast` so it infers `u5` on a 32-bit `usize`
+    /// and `u6` on a 64-bit one, rather than the destination entering the
+    /// library. That is only sound because `init` caps `log_n` at
+    /// `max_log_domain`, which is below `@bitSizeOf(usize) - 1` everywhere —
+    /// an unchecked shift here is what `tools/wasm_expected.txt` was recording
+    /// as a compile error on wasm32.
     pub fn size(self: Domain) usize {
-        return @as(usize, 1) << self.log_n;
+        return @as(usize, 1) << @as(std.math.Log2Int(usize), @intCast(self.log_n));
     }
 
     /// The i-th domain element (natural order): g_k^i.
@@ -202,4 +231,73 @@ test "domain: fold pairing halves exactly 2-to-1" {
         }
         try t.expectEqual(@as(usize, 2), hits);
     }
+}
+
+test "init accepts exactly [0, max_log_domain] and size() is safe across it" {
+    // The guard has to agree with the thing it guards, and that agreement is
+    // the test. `init` used to accept up to `torus_log_order` (61) while
+    // `size()` returned 1 << log_n, so log_n = 61 passed every check and then
+    // asked for 2.6e18 bytes. The bug was invisible because nothing asserted
+    // the pair — only each half was believed.
+    //
+    // Pinning the exact named error matters: a test that merely asserted
+    // "accept or reject" would have passed on a guard that rejected for the
+    // wrong reason, or on one that accepted and then failed later.
+    var log_n: u6 = 0;
+    while (log_n <= max_log_domain) : (log_n += 1) {
+        const d = try Domain.init(log_n);
+        try std.testing.expectEqual(log_n, d.log_n);
+
+        // size() must not overflow, and must not exceed what `usize` can hold.
+        const n = d.size();
+        // The same `@intCast` as `size()`, and for the same reason: a bare
+        // u6 shift is a COMPILE error on wasm32, where the shift amount must be
+        // u5. Asserting the arithmetic here must not reintroduce the defect the
+        // arithmetic is there to prove absent.
+        try std.testing.expectEqual(@as(usize, 1) << @as(std.math.Log2Int(usize), @intCast(log_n)), n);
+        try std.testing.expect(n <= std.math.maxInt(usize));
+
+        // The real invariant: representable is not the same as allocatable.
+        // 2^61 is a fine usize and an impossible buffer.
+        try std.testing.expect(n <= (@as(usize, 1) << max_log_domain));
+    }
+
+    // One past the bound is rejected, by name.
+    try std.testing.expectError(error.DomainTooLarge, Domain.init(max_log_domain + 1));
+
+    // And the value the external dev passed, which is the one that detonated.
+    // It is inside the torus order and outside the resource limit, which is
+    // exactly the distinction the old guard was missing.
+    try std.testing.expect(torus_log_order > max_log_domain);
+    try std.testing.expectError(error.DomainTooLarge, Domain.init(torus_log_order));
+}
+
+test "the bound is below what any supported usize can shift" {
+    // `size()` casts the shift amount to Log2Int(usize). If `max_log_domain`
+    // ever grew to or past the bit width, that cast becomes a panic in Debug
+    // and undefined behaviour in ReleaseFast — the same defect one level down,
+    // and the reason the wasm sweep recorded this file as a compile error.
+    try std.testing.expect(max_log_domain < @bitSizeOf(usize) - 1);
+}
+
+test "max_log_domain is above what the library actually asks for" {
+    // The other half of a resource limit, and the half that is easy to get
+    // wrong in the opposite direction. A limit that rejects legitimate work is
+    // the same defect as a limit that accepts impossible work: both are a
+    // guard that disagrees with the thing it guards. The largest `log_n` any
+    // code in this repository currently requests is 8 (256 points, the fixed
+    // prover path at `libs/prove/root.zig` and the FRI tests); the prover's
+    // variable path is `ceilLog2(raw_len)`, so the bound is a judgement about
+    // future trace sizes rather than a number this suite can derive.
+    //
+    // What is checkable, and checked here: the bound must clear every
+    // in-tree request, so tightening or widening it cannot silently reject the
+    // library's own use of it. The *value* of the bound is a resource
+    // decision, documented at its declaration, not a fact a test can discover.
+    try std.testing.expect(max_log_domain >= 8);
+
+    // And it must stay a power-of-two count a byte-per-element buffer could
+    // plausibly hold. 2^30 points is 1G: above any single AIR trace, and a
+    // buffer of it is not a thing the allocator is asked for in this codebase.
+    try std.testing.expect(max_log_domain <= 30);
 }

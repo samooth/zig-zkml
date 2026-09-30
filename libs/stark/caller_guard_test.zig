@@ -75,16 +75,31 @@ test "float_ref.roundToNearestEven: keep out of range is BadKeep, not a shifted 
     _ = try float_ref.roundToNearestEven(1, 63);
 }
 
-test "fri.Domain.init: log_n above the torus order is DomainTooLarge" {
-    // torus_log_order is 61, and log_n is a u6, so 62 is reachable from a
-    // prover config. The old assert disappeared in ReleaseFast and
-    // `torus_log_order - log_n` wrapped, yielding a generator of the wrong
-    // order — a proof that cannot verify, for a reason nobody could see.
+test "fri.Domain.init: log_n above max_log_domain is DomainTooLarge" {
+    // The bound is a resource limit, not the torus order. `log_n` is a u6 that
+    // reaches `init` from outside — `libs/fri/root.zig` reads it out of the
+    // prover config and out of the proof — so both ends of the accepted range
+    // have to be pinned by name.
+    //
+    // It was previously pinned at 61, against the torus order. That was a
+    // correct guard against the ReleaseFast underflow in
+    // `torus_log_order - log_n`, and an incomplete one: 61 is a valid usize
+    // and an impossible buffer, so `init(61)` succeeded and `size()` returned
+    // 2^61. The guard agreed with the torus and not with the thing it guards.
     try testing.expectError(error.DomainTooLarge, domain.Domain.init(62));
     try testing.expectError(error.DomainTooLarge, domain.Domain.init(63));
+    // Inside the torus order, outside the resource limit: this is the value
+    // that passed every check and then asked for 2.6e18 bytes.
+    try testing.expect(domain.torus_log_order > domain.max_log_domain);
+    try testing.expectError(error.DomainTooLarge, domain.Domain.init(domain.torus_log_order));
+    try testing.expectError(error.DomainTooLarge, domain.Domain.init(domain.max_log_domain + 1));
     // 0 is the trivial subgroup and is explicitly valid, as is the boundary.
     _ = try domain.Domain.init(0);
-    _ = try domain.Domain.init(61);
+    const edge = try domain.Domain.init(domain.max_log_domain);
+    try testing.expectEqual(
+        @as(usize, 1) << domain.max_log_domain,
+        edge.size(),
+    );
 }
 
 // --- the composed error sets -------------------------------------------------
