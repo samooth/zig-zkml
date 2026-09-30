@@ -212,9 +212,13 @@ along, so `-Dtarget=wasm32-freestanding` was always available and never
 exercised: the seven gates all pass on one destination, and "this compiles"
 had no destination in it. Fix one of the pinned files and the gate goes red
 rather than silently contradicting the list. The four repo-side entries are
-a 32-bit `usize` shift-width defect (`@as(usize, 1) << log_n` with
-`log_n: u6` needs `u5` of shift on wasm32 and `u6` on native), which is
-neither the `posix` gap nor `smp_allocator`.
+a 32-bit `usize` shift-width defect, which is neither the `posix` gap nor
+`smp_allocator`. `@as(usize, 1) << log_n` needs `u5` of shift on wasm32 and
+`u6` on native, and the fix is `@intCast` on the shift amount: it infers
+whichever the destination's `usize` needs, so the destination does not enter
+the library. Fourteen such sites exist; `prove` and `stark` are done, and the
+six in `libs/fri` wait on the architecture decision, so moving the list is not
+yet possible for them.
 
 `bench-fingerprint` is a real gate and it does run here, but `.github/workflows/ci.yml`
 never calls it — `grep -c bench-fingerprint .github/workflows/ci.yml` is 0. It is

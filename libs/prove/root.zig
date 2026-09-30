@@ -43,7 +43,7 @@ fn ceilLog2(n: usize) u6 {
 pub fn flattenToFp2(allocator: std.mem.Allocator, trace: Trace) ![]Fp2 {
     const raw_len = trace.rows * trace.cols;
     const log_n = ceilLog2(raw_len);
-    const n: usize = @as(usize, 1) << log_n;
+    const n: usize = @as(usize, 1) << @intCast(log_n);
     const evals = try allocator.alloc(Fp2, n);
     for (0..n) |i| {
         if (i < raw_len) {
@@ -95,7 +95,7 @@ test "flattenToFp2 pads to power of 2" {
 
     const raw_len = 5;
     const log_n = ceilLog2(raw_len);
-    try t.expectEqual(@as(usize, 1) << log_n, evals.len);
+    try t.expectEqual(@as(usize, 1) << @intCast(log_n), evals.len);
     try t.expect(evals.len >= raw_len);
     for (0..raw_len) |i| {
         try t.expect(evals[i].a.eql(data[i]));

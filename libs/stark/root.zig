@@ -123,7 +123,7 @@ pub const Config = struct {
             return Error.InvalidConfig;
         }
         if (system.trace_rows) |expected| {
-            if ((@as(usize, 1) << self.log_trace) != expected) return Error.InvalidConfig;
+            if ((@as(usize, 1) << @intCast(self.log_trace)) != expected) return Error.InvalidConfig;
         }
         // Each exempt row adds one degree of headroom to the quotient (P·E
         // is one degree taller than P), so the FRI residual bound has to
@@ -132,13 +132,13 @@ pub const Config = struct {
         // exemption is rows-1: inside the existing bound, which is why the
         // GEMM configs do not have to move.
         if (system.transition_exemptions > 0) {
-            const n_rows = @as(usize, 1) << self.log_trace;
+            const n_rows = @as(usize, 1) << @intCast(self.log_trace);
             const deg_p = d * (n_rows -| 1);
             const deg_q = if (deg_p + system.transition_exemptions <= n_rows)
                 0
             else
                 deg_p + system.transition_exemptions - n_rows;
-            const bound = @as(usize, 1) << self.fri.log_residual_degree;
+            const bound = @as(usize, 1) << @intCast(self.fri.log_residual_degree);
             if (deg_q >= bound) return Error.InvalidConfig;
         }
         _ = self.fri.validate() catch return Error.InvalidConfig;
@@ -373,7 +373,7 @@ pub fn prove(
     // the indices divisible by 2^b (g_{k+b}^{2^b * j} = g_k^j), so a
     // row-shifted constraint reads that far away — NOT one position, and
     // NOT n positions.
-    const stride = @as(usize, 1) << config.log_blowup;
+    const stride = @as(usize, 1) << @intCast(config.log_blowup);
 
     const columns = try buildLde(allocator, trace, config);
     defer {
@@ -530,7 +530,7 @@ pub fn verify(
 
     const lde_dom = try Domain.init(config.logLde());
     const lde_n = lde_dom.size();
-    const n = @as(usize, 1) << config.log_trace;
+    const n = @as(usize, 1) << @intCast(config.log_trace);
     if (system.trace_rows) |expected| if (n != expected) return Error.InvalidProof;
 
     transcript.absorbBytes(&proof.commitment.root);
@@ -586,7 +586,7 @@ pub fn verify(
     if (system.hasBoundary()) {
         const expected: usize = if (n > 1) 2 else 1;
         if (proof.boundary_openings.len != expected) return Error.InvalidProof;
-        const stride = @as(usize, 1) << config.log_blowup;
+        const stride = @as(usize, 1) << @intCast(config.log_blowup);
         for (proof.boundary_openings, 0..) |opening, qi| {
             if (opening.prev.len != ncols or opening.current.len != ncols or
                 opening.next.len != ncols) return Error.InvalidProof;
