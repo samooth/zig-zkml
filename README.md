@@ -91,14 +91,27 @@ borrowed from `zig-algebra` is `zig-merkle`, the Merkle tree used for column
 commitments in exactly two places (`libs/stark/commit.zig`,
 `libs/fri/root.zig`). `zig-zk` is not consumed.
 
-**Why the FRI is our own.** The norm-1 torus of F_{p²} has order `p + 1`, and
-a clean 2-adic subgroup — the one the degree test needs — requires `p + 1` to
-be *exactly* a power of two. Our Goldilocks is `p = 2⁶¹ − 1`, so `p + 1 = 2⁶¹`
-and the torus order is a pure power of two, which also makes halving exact
-(`1/x` on the torus is the conjugate). Upstream's Goldilocks is
-`p = 2⁶⁴ − 2³² + 1`, where `p + 1 = 2·(odd)` and no such subgroup exists. That
-is the reason for the fork, and it is a property of the field rather than of
-any particular FRI implementation.
+**Why the FRI is our own — and when that stopped holding.** The norm-1 torus of
+F_{p²} has order `p + 1`, and a clean 2-adic subgroup — the one the degree test
+needs — requires `p + 1` to be *exactly* a power of two. Our Goldilocks is
+`p = 2⁶¹ − 1`, so `p + 1 = 2⁶¹` and the torus order is a pure power of two,
+which also makes halving exact (`1/x` on the torus is the conjugate).
+
+That argument was written against `zig-algebra` v0.5.2, whose only Goldilocks is
+`p = 2⁶⁴ − 2³² + 1`: there `p + 1 = 2·(odd)` and the property is unavailable
+upstream. **It is no longer unavailable.** v0.6.0 ships
+`libs/field/src/predef/m61.zig:12` as `zf.Field(2305843009213693951)` — which is
+`2⁶¹ − 1`, the same modulus, with the same `p + 1 = 2⁶¹`. The field argument
+therefore no longer separates our FRI from the pin's. It is kept here because a
+reason that expired in a pin bump is worse than an absent one, not because it
+still holds.
+
+What remains is a decision rather than a property. `tools/fri_diff.sh` measures
+the two compositions equal — 24 checks, 0 discrepancies, with each side mutated
+in turn — so the residual cost is the transcript: the pin rejects toward each
+type and samples `challengeField(Fp2)` and `challengeField(Q)` independently, so
+proof bytes are not identical. Adopting it is a different wire format, not just
+different code. Checked at v0.6.0, `0cc3a6c`.
 
 ### Layout
 
@@ -145,7 +158,7 @@ module import and runs inside `zig build test`.
 ## Building and testing
 
 ```bash
-zig build --summary all test    # unit tests — check the count
+zig build --summary all test    # unit tests
 zig build --summary all abi     # C ABI end-to-end + exported-symbol gate
 zig build --summary all verify  # tests + ABI + independent Python audit
 zig build fmt                   # formatting gate
@@ -157,7 +170,15 @@ zig build bench -- --k 256      # GEMM proving cost
 gates, not CI**: both need a sibling checkout outside this repository
 (`../llama.cpp`, and `../ktransformers-zig` already built). CI
 (`.github/workflows/ci.yml`) runs everything a clean checkout can: `fmt`, the
-test suite, `abi`, `verify` and the vLLM adapter.
+test suite, `abi`, `verify`, `spike` and the vLLM adapter — six blocking gates.
+
+Three more exist and are not in that list. `zig build llama-adapter` and
+`zig build kt-adapter` need sibling checkouts, and `zig build bench-fingerprint`
+shells out to a full second build, so all three are **local**. The fourth,
+`zig build wasm-portability`, runs on a weekly schedule in CI but is **not
+blocking**: it asserts that `wasm32-freestanding` does *not* compile, against a
+pinned list of the files that currently fail, so that destination stays visibly
+unsupported instead of silently unexercised.
 
 `verify` is the F0 acceptance gate: the Zig library generates a weights root
 and an inclusion proof through the exported C API, and

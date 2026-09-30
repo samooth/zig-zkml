@@ -154,12 +154,41 @@ pub fn main() !void {
     const p: u64 = (1 << 61) - 1;
     // Boundaries first: zero, one, p-1, and values that exceed p so the two
     // reduction paths are compared and not just the happy one.
-    const vals = [_]u64{
+    const vals_seed = [_]u64{
         0,                        1,                     2,                     3,
         p - 1,                    p - 2,                 (p - 1) / 2,           p,
         p + 1,                    2 * p,                 2 * p + 1,             std.math.maxInt(u64),
         std.math.maxInt(u64) - 1, 0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210, 1234567890123456789,
     };
+
+    // 16 valores para un primo de 61 bits son POCOS: una reduccion mal
+    // escrita puede coincidir en esos 16 puntos y divergir en el resto. Se
+    // anaden 48 mas de una secuencia determinista —LCG con semilla fija,
+    // porque un numero medido con una fuente que no exista manana no es
+    // verificable— y algunos limites de cada bloque de la reduccion.
+    var vals: [64]u64 = undefined;
+    for (vals_seed, 0..) |sv, i| vals[i] = sv;
+    var seed: u64 = 0x9E3779B97F4A7C15;
+    for (16..vals.len) |i| {
+        seed = seed *% 6364136223846793005 +% 1442695040888963407;
+        vals[i] = seed;
+    }
+    vals[16] = p / 7;
+    vals[17] = p / 3;
+    vals[18] = p - p / 5;
+    vals[19] = (p - 1) / 4;
+    vals[20] = std.math.maxInt(u64) / 3;
+    vals[21] = 1 << 60;
+    vals[22] = (1 << 60) + 1;
+    vals[23] = 3 * p / 4;
+    vals[24] = @intCast((@as(u128, p) * 15) / 16);
+    vals[25] = (p + 1) / 2;
+    vals[26] = p / 2 - 1;
+    vals[27] = 2;
+    vals[28] = 3;
+    vals[29] = p - 3;
+    vals[30] = p / 2 + 1;
+    vals[31] = std.math.maxInt(u64) / 2;
 
     std.debug.print("p = {d}\n", .{p});
     std.debug.print("representacion: mio canonica en `rep` · predef SmallField canonica en `value`\n\n", .{});

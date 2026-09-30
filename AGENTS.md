@@ -65,9 +65,11 @@ holds or it does not; the audit that caught four of them in `README.md` is the
 model. Two corollaries that have earned their place:
 
 - **A number needs a gate, or it does not go in the document.** The test count
-  is in `README.md` because CI checks it. It is *not* in `docs/soundness.md`,
-  because nothing checks that, and a copy nobody verifies goes stale silently —
-  which is worse than no number at all.
+  is in neither `README.md` nor `docs/soundness.md`, because CI does not check
+  it: the gate is a **floor** (`2[0-9]{2}/2[0-9]{2} tests passed`), not the
+  exact count, and a floor cannot justify printing the number it produces. A
+  copy nobody verifies goes stale silently — which is worse than no number at
+  all, and no number at all is what this repository decided to print.
 - **Absolute timings move with machine load.** The stable claim is the ratio,
   not the µs/MAC. Quote the ratio.
 
@@ -197,28 +199,64 @@ zig build spike
 zig build vllm-adapter
 ```
 
-**Two more run here and are local only, because both shell out to a full
-second build:**
+**Three more run here and are not in that list, for three different reasons:**
 
 ```sh
-zig build bench-fingerprint
-zig build wasm-portability
+zig build bench-fingerprint   # local: shells out to a full second build
+zig build wasm-consumer       # local + weekly CI, non-blocking
+zig build wasm-test-sweep     # local + weekly CI, non-blocking
 ```
 
-`wasm-portability` asserts that **`wasm32-freestanding` does not compile**,
-against the file list in `tools/wasm_expected.txt`. It does not assert that
-wasm works — it does not. `build.zig` has had `b.standardTargetOptions` all
-along, so `-Dtarget=wasm32-freestanding` was always available and never
-exercised: the seven gates all pass on one destination, and "this compiles"
-had no destination in it. Fix one of the pinned files and the gate goes red
-rather than silently contradicting the list. The four repo-side entries are
-a 32-bit `usize` shift-width defect, which is neither the `posix` gap nor
-`smp_allocator`. `@as(usize, 1) << log_n` needs `u5` of shift on wasm32 and
-`u6` on native, and the fix is `@intCast` on the shift amount: it infers
-whichever the destination's `usize` needs, so the destination does not enter
-the library. Fourteen such sites exist; `prove` and `stark` are done, and the
-six in `libs/fri` wait on the architecture decision, so moving the list is not
-yet possible for them.
+### The portability gate is two gates, and the split is the point
+
+`zig build` runs for one target, so "this compiles" had no destination in it.
+The first attempt supplied one by pinning every file that failed under
+`zig build test -Dtarget=wasm32-freestanding`. That list was not a gate about
+portability, it was an inventory wearing one, and it mixed three unrelated
+things: stdlib internals, repository code, and **the test harness itself**,
+which takes `std.process.Init` and spawns threads and can never compile
+freestanding on any platform for any reason connected to this library. The
+harness in the list meant every future fix moved the list for an unrelated
+reason, and a gate that cries wolf is worse than no gate.
+
+So the question is now asked of a consumer, and the inventory kept its honest
+name:
+
+- **`zig build wasm-consumer`** compiles `tools/wasm_consumer_shim.zig`, which
+  imports the public C ABI (`libs/api.zig`) and nothing else. That is
+  literally what an embedder does, so the answer is a yes or a no. **It
+  passes.**
+- **`zig build wasm-test-sweep`** is the inventory, against
+  `tools/wasm_test_sweep_expected.txt`, renamed because a file called
+  `wasm_expected.txt` that lists `posix.zig` lies about its own reach. Data
+  lines are bare paths; the file may carry `#` comments saying what each entry
+  is and why, because a list that cannot explain itself is half a list of
+  tickets. Five entries: four std/harness, and `libs/fri/root.zig`.
+
+**The shim had to be shown failing before its green meant anything.** Its first
+version held `&api.zkml_witness_session_create` and friends. Taking a
+function's address analyses its *signature*, not its *body* — and the body is
+where `std.heap.smp_allocator` lives. So it compiled cleanly against
+freestanding while the one defect it exists to catch sat in the file it was
+supposed to be reading. That is the `&f` shape, committed in the gate built to
+prevent it. The shim now *calls* the entry points from an `export fn`, whose
+body is always analysed, and the mutation behind it is measured: reverting
+`process_allocator` to `smp_allocator` turns the step red on
+`std/Thread.zig:493: Unsupported operating system freestanding`.
+
+That one line — `std.heap.smp_allocator`, which needs threads and does not
+exist without them — had blocked the web demo since the 27th, through twelve
+commits of tests and documentation that never touched it. The fix asks
+`builtin.single_threaded` rather than inferring from the OS. **A gate is only
+worth its green if you have watched it go red on the defect it names.**
+
+The `u5`/`u6` sites are a different matter and are mostly done: `@as(usize, 1)
+<< log_n` needs `u5` of shift on wasm32 and `u6` on native, and `@intCast` on
+the shift amount infers whichever the destination needs, so the destination
+does not enter the library. `prove` and `stark` are done; `libs/fri/domain.zig`
+is done; **the two that remain in `libs/fri/root.zig` wait on the architecture
+decision**, so the sweep list cannot reach zero until that is settled — by
+either two `@intCast`s or deleting the file.
 
 `bench-fingerprint` is a real gate and it does run here, but `.github/workflows/ci.yml`
 never calls it — `grep -c bench-fingerprint .github/workflows/ci.yml` is 0. It is
@@ -389,3 +427,20 @@ Pin by tag, not by commit SHA, and consume only what is used. An unused
 declared dependency is a supply-chain surface with no offsetting benefit — and
 a stale one is worse, because the URL keeps resolving through GitHub's archive
 cache after the commit it names is gone.
+
+### `patch-dep` on `libs/api.zig` fails on purpose, and the failure is the point
+
+A consumer working around the freestanding allocator without touching this
+library ended up applying the fix through `zig patch --dep`, which rewrites
+`libs/api.zig` **textually** and refuses to proceed if the source does not have
+the shape it expects — it fails with `UnrecognisedSource`. That is correct
+behaviour and it is the class of detector this repository builds on its own
+terms: a tool that refuses to no-op. A patcher that silently did nothing would
+be worse than one that stops.
+
+So expect it to break, and do not "fix" it by relaxing the matcher. Someone
+will reformat that file, the patcher will refuse, and the error only makes
+sense if you already know the refusal is intended. The same reasoning applies
+to the allocator itself: it now asks `builtin.single_threaded`, so if someone
+"simplifies" it back to a bare `smp_allocator`, `zig build wasm-consumer` goes
+red on `std/Thread.zig:493` rather than waiting for an embedder to find out.
