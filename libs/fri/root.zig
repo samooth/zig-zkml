@@ -59,11 +59,6 @@ pub const Fp2 = fp2.Fp2;
 pub const Goldilocks = fp2.Goldilocks;
 pub const Domain = domain.Domain;
 pub const max_log_domain = domain.max_log_domain;
-// Reexport del transcript de produccion. `verify` y `prove` lo reciben como
-// `anytype`, asi que quien los llama necesita un tipo concrete: sin esto, cada
-// consumidor tiene que importar transcript.zig por su cuenta, y en un modulo
-// con las copias a por etapas eso es un modulo mas que declares.
-pub const Transcript = @import("../transcript.zig").Transcript;
 
 pub const HASH_LEN = 32;
 
