@@ -34,7 +34,21 @@ const Io = std.Io;
 // diferencial mide lo mismo — pero para un BENCH de coste lo que interesa es
 // el coste del camino de produccion, y medir con un Blake3 de juguete seria
 // medir el juguete.
-const Transcript = fri.Transcript;
+const Transcript = @import("transcript").Transcript;
+
+/// A duration in words, so the extrapolated number is not read as milliseconds
+/// when it is years.
+fn human_ms(ms: f64) []const u8 {
+    if (ms < 1_000) return "menos de un segundo";
+    if (ms < 60_000) return "menos de un minuto";
+    if (ms < 3_600_000) return "menos de una hora";
+    if (ms < 86_400_000) return "menos de un dia";
+    const days = ms / 86_400_000;
+    if (days < 365) return "semanas a meses";
+    const years = days / 365;
+    if (years < 100_000) return "anos";
+    return "mas alla de lo que un proceso mide";
+}
 
 /// One rung of the ladder.
 const Rung = struct { log_domain: u6 };
@@ -55,6 +69,9 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("Fp2 = {d} bytes; el dominio son 2^log_domain puntos\n\n", .{@sizeOf(Fp2)});
 
     var prev_ns: ?i96 = null;
+    var last_prove_ms: i96 = 0;
+    var factors: [16]f64 = undefined;
+    var n_factors: usize = 0;
 
     for (LADDER) |rung| {
         const log_d = rung.log_domain;
@@ -125,9 +142,15 @@ pub fn main(init: std.process.Init) !void {
         );
         if (prev_ns) |p| {
             if (p > 0 and prove_ns > 0) {
-                std.debug.print("  x{d:.2} el prove", .{@as(f64, @floatFromInt(prove_ns)) / @as(f64, @floatFromInt(p))});
+                const f = @as(f64, @floatFromInt(prove_ns)) / @as(f64, @floatFromInt(p));
+                std.debug.print("  x{d:.2} el prove", .{f});
+                if (n_factors < factors.len) {
+                    factors[n_factors] = f;
+                    n_factors += 1;
+                }
             }
         }
+        last_prove_ms = prove_ms;
         std.debug.print("\n", .{});
 
         if (!verified) {
@@ -135,6 +158,50 @@ pub fn main(init: std.process.Init) !void {
         }
 
         prev_ns = prove_ns;
+    }
+
+    // LA TASA DE CRECIMIENTO, calculada aqui y no en la prosa.
+    //
+    // Una vez lei estos numeros y escribi "casi lineal, ~2x por duplicacion",
+    // porque mi tabla saltaba dos peldanos y leia la fila como una duplicacion.
+    // Los factores median 3,7 / 4,2 / 4,3 / 4,8: el crecimiento es ~4x por
+    // duplicacion y ADEMAS sube, asi que 4 es un suelo y no un promedio. Con 2x
+    // la extrapolacion a 2^30 salia mil veces el trabajo medido; con 4x son un
+    // millon. Un factor mil de diferencia en el argumento, y la conclusion se
+    // sostiene —es mas fuerte— pero solo porque la cuenta se hace aqui y no en
+    // un mensaje.
+    //
+    // Se imprime la media geometrica de los factores observados y lo que sale
+    // al extrapolar, para que el lector pueda rehacer la division.
+    if (factors.len >= 2) {
+        var log_sum: f64 = 0;
+        for (factors[0..n_factors]) |f| log_sum += @log(f);
+        const geo = @exp(log_sum / @as(f64, @floatFromInt(n_factors)));
+        const measured_to: u6 = LADDER[LADDER.len - 1].log_domain;
+        const to_bound: u6 = fri.max_log_domain;
+        const doublings = @as(f64, @floatFromInt(to_bound - measured_to));
+        const factor = std.math.pow(f64, geo, doublings);
+        std.debug.print("\ntasa medida: {d:.2}x por duplicacion (media geometrica de {d} factores)\n", .{ geo, n_factors });
+        // El texto NO afirma una tendencia. Una version anterior de esta linea
+        // decia "sube, asi que la media es un suelo", y en esta corrida los
+        // factores son 3,57 / 4,39 / 4,04 / 3,58: suben y vuelven a bajar. En
+        // otra corrida si subian. Afirmar la direccion cuando el dato no la
+        // sostiene es el mismo error que leer una fila saltada como una
+        // duplicacion.
+        var fmin: f64 = factors[0];
+        var fmax: f64 = factors[0];
+        for (factors[0..n_factors]) |f| {
+            if (f < fmin) fmin = f;
+            if (f > fmax) fmax = f;
+        }
+        std.debug.print("  factores observados entre {d:.2} y {d:.2}; la media cae dentro, y el rango es la incertidumbre\n", .{ fmin, fmax });
+        std.debug.print("  extrapolar de 2^{d} a 2^{d} son {d:.0} duplicaciones: {e:.0}x el trabajo medido\n", .{ measured_to, to_bound, doublings, factor });
+        std.debug.print("  con {d:.0} ms medidos, 2^{d} sale en {e:.0} ms — {s}\n", .{
+            @as(f64, @floatFromInt(last_prove_ms)),
+            to_bound,
+            @as(f64, @floatFromInt(last_prove_ms)) * factor,
+            human_ms(@as(f64, @floatFromInt(last_prove_ms)) * factor),
+        });
     }
 
     std.debug.print("\n", .{});

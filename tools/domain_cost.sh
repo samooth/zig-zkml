@@ -23,9 +23,10 @@ stage_fri "$STAGE"
 # Los mismos modulos que fri_diff.sh, por la misma razon: `libs/fri` cuelga de
 # merkle y, a traves de el, del resto del paquete. Copiar la invocacion que ya
 # funciona es mejor que descubrir que mas falta, aqui y otra vez.
-"$ZIG" build-exe -OReleaseFast --dep fri --dep zig-field \
+"$ZIG" build-exe -OReleaseFast --dep fri --dep transcript --dep zig-field \
     --dep zig-algebra-traits --dep zig-hash --dep zig-bigint \
     -Mroot="$ROOT/tools/domain_cost.zig" \
+    --dep transcript -Mtranscript="$ROOT/libs/transcript.zig" \
     --dep zig-merkle -Mfri="$STAGE/root.zig" \
     -Mzig-field="$PKG/libs/field/src/lib.zig" \
     -Mzig-merkle="$PKG/libs/merkle/src/root.zig" \
