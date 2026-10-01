@@ -55,10 +55,23 @@ echo "fidelidad verificada: las copias solo difieren en las lineas de import"
 # repositorio y editarlo dentro del nuestro seria cambiarlo sin su permiso.
 # Con la variable puesta, la verificacion de fidelidad se salta a proposito y
 # lo dice, porque ya no es una copia fiel.
-if [ -n "${FRI_DIFF_MUTATE_MINE:-}" ]; then
-  echo "MUTACION activa en MI fri: $FRI_DIFF_MUTATE_MINE"
-  fail=1   # la fidelidad ya no aplica
-fi
+  # El gancho de MI lado estaba VACIO: ponia fail=1, imprimia "MUTACION activa
+  # en MI fri" y no mutaba nada. Un print que anuncia una sustitucion que no
+  # ocurrio es el fallo que este repositorio ya ha pagado tres veces, y aqui es
+  # el mas caro: el 0 que devuelve se lee como una medicion. Ahora muta de
+  # verdad, y ABORTA si el patron no aparece.
+  if [ -n "${FRI_DIFF_MUTATE_MINE:-}" ]; then
+    echo "MUTACION activa en MI fri: $FRI_DIFF_MUTATE_MINE"
+    fail=1   # la fidelidad ya no aplica
+    case "$FRI_DIFF_MUTATE_MINE" in
+      una-ronda-menos)
+        # Las rondas las calcula `Config.validate`, no una resta en el sitio
+        # de la llamada, asi que se muta la linea que existe de verdad.
+        perl -0pi -e 's/const rounds = self[.]log_domain - self[.]log_final;/const rounds = self.log_domain - self.log_final - 1; \/\/ MUTADO/' "$STAGE/root.zig"
+        grep -q MUTADO "$STAGE/root.zig" || { echo "ABORTO: la mutacion de MI fri no aplico" >&2; exit 2; } ;;
+      *) echo "mutacion desconocida para MI fri: $FRI_DIFF_MUTATE_MINE" >&2; exit 2 ;;
+    esac
+  fi
 if [ -n "${FRI_DIFF_MUTATE_PIN:-}" ]; then
   echo "MUTACION activa en el PIN (copia por etapas, no zig-pkg): $FRI_DIFF_MUTATE_PIN"
   fail=1
