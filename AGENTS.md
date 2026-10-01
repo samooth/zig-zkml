@@ -185,6 +185,61 @@ Verify with `zig version` before trusting a result, and check `zig build fmt`'s
 **exit code**: it prints the offending file and still returns 0 in some
 invocations, so a `&&` does not see the failure.
 
+## Skills
+
+**Load the skill before writing the code, not after it fails.** Three are
+available and this repository is exactly what they are for:
+
+| skill | load it when |
+|---|---|
+| `zig` | any Zig is being written or read — language semantics, stdlib, allocators, `build.zig` |
+| `zig-multios` | anything touches more than one target, or `build.zig` cross-compilation |
+| `zkp` | the task is ZKP-shaped; it is a **router** that picks the specialist |
+
+`zig-multios` covers Windows, Linux, macOS, Android and WASM, and it excludes
+itself for single-OS projects. This one is not single-OS: it builds for the
+host and for `wasm32-freestanding`, and the arithmetic in `libs/fri` and
+`libs/field` has to be correct at 32-bit and 64-bit `usize` simultaneously.
+Those are the targets that exist *here* — `wasi` appears in no `build.zig`, no
+workflow and no tool, so a rule written about it would be a conclusion carrying
+a tree it was not measured in.
+
+**The Zig skill exists because 0.16 differs from what most of us remember**,
+and that is not a hypothetical: it documents itself as covering the `std.Io`
+interface, allocators and cross-compilation for 0.16.x and 0.17.x. Writing the
+consumer shim without it cost six compile iterations, each on pure type
+inference rather than on anything about consumers:
+
+1. bare `null` does not infer to `*anyopaque`
+2. address zero is rejected for `*anyopaque`
+3. an optional return needs `.?` before it can be passed on
+4. an `i32` result must be discarded, not left bare
+5. a comptime `0` does not infer to `?[*]u8`
+6. `?*usize` and `?[*]u8` are different types and one is not the other
+
+Every one of those is a rule about how 0.16 infers, which is the category the
+skill covers. None was a design problem; all six were avoidable, and the list is
+checkable against the session rather than taken on trust.
+
+The ZK router earns its place on the decisions rather than on the syntax.
+Choosing between our own `libs/fri` and `zig-algebra`'s, or whether a torus of
+order `2^61` is the right shape, are questions about FRI, soundness and
+transcripts — not about Zig. `zkp` routes to `zkp-theory` (FRI, STARK, AIR,
+sumcheck, soundness error terms) and `zkp-vm` (the other proving stacks, for the
+"would a zkVM be better" question that `Roadmap` implies). Load the router, then
+the one it names.
+
+Scope it honestly: **not all three, always.** `zkp` on a formatting fix is
+noise, and `zig-multios` on a one-line typo in a comment is worse. The rule is
+that the skill for the thing you are about to write is loaded first, and that
+choosing not to load one is a decision you can say out loud rather than a
+default.
+
+This is prose and it is **not** a gate. There is no test that can check whether
+an agent loaded a skill before typing — that would mean instrumenting the
+session, and the instrument would cost more than the rule. It is here because a
+written rule is still the contract, exactly as the language policy is.
+
 ## Gates
 
 **Six run in CI**, and a report that lists gates lists these six:
