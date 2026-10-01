@@ -110,7 +110,24 @@ fn validate_decomposition() !void {
         .{ .c0 = 7, .c1 = 9 }, // BOTH parts non-zero
     };
     for (cases) |cs| {
-        note("layout de bytes c0||c1", byte_layout_is_c0_then_c1(cs.c0, cs.c1));
+        note("layout de bytes c0||c1 (pin)", byte_layout_is_c0_then_c1(cs.c0, cs.c1));
+        // El check de arriba compara el PIN CONTRA SI MISMO: construye
+        // Q.new(c0,c1) y lo contrasta con dos torus calculados aparte. Es una
+        // buena comprobacion del pin, y durante mucho tiempo fue la UNICA sobre
+        // layout de bytes — con el nombre de una asercion sobre "el layout".
+        //
+        // Lo que no hacia era llamar a NUESTRO serializador, que es lo que
+        // entraria en un transcript. Intercambiar a y b en Fp2.toBytes
+        // producia CERO discrepancias: 476 comprobaciones y ninguna lo veia.
+        // Una asercion que no se puede fallar no es una asercion, y esta se
+        // llevaba un nombre que prometia mas de lo que medía.
+        const mine_bytes = Fp2.fromRaw(cs.c0, cs.c1).toBytes();
+        const pin_bytes = Q.new(asTorus(cs.c0), asTorus(cs.c1)).toBytes();
+        const layout_ok = std.mem.eql(u8, &mine_bytes, &pin_bytes);
+        note("layout de bytes (mi toBytes == pin)", layout_ok);
+        if (!layout_ok) {
+            std.debug.print("    ({d},{d}): mio={x} pin={x}\n", .{ cs.c0, cs.c1, &mine_bytes, &pin_bytes });
+        }
         const built = Q.new(asTorus(cs.c0), asTorus(cs.c1));
         const back = try from_torus(built);
         note("descomposicion orden c0,c1", back.a.toU64() == cs.c0 and back.b.toU64() == cs.c1);
@@ -127,6 +144,47 @@ fn validate_decomposition() !void {
 /// The anchor: arithmetic done by the PIN, decomposed, against the same
 /// arithmetic done by me. This is a cross-check — the pin's `mul` is what
 /// decides whether the conversion is right, not my own.
+/// La guarda de canonicidad de `fromBytes`.
+///
+/// El codigo dice, en su propio comentario, que rechaza codificaciones no
+/// canonicas "so rejection sampling works". Eso es una afirmacion sobre el
+/// transcript, y este instrumento no la comprobaba: debilitar la guarda de `>=`
+/// a `>` en la comparacion de `b` daba CERO discrepancias, porque nunca se
+/// alimentaba una codificacion no canonica. Una propiedad que el codigo
+/// afirma y el instrumento no mide es una propiedad documentada, no verificada.
+fn validate_canonicality() !void {
+    const p: u64 = @intCast(G.p);
+
+    // Canonical de partida: a y b ambos dentro del campo.
+    var good = Fp2.fromRaw(7, 9).toBytes();
+    note("fromBytes acepta lo canonico", (Fp2.fromBytes(&good) catch null) != null);
+
+    // a == p: no canonico. Debe rechazarse.
+    var bad_a = good;
+    std.mem.writeInt(u64, bad_a[0..8], p, .little);
+    note("fromBytes rechaza a == p", blk: {
+        if (Fp2.fromBytes(&bad_a)) |_| break :blk false else |_| break :blk true;
+    });
+
+    // b == p: no canonico. Debe rechazarse. Es el caso que la guarda de `b`
+    // cubre y el que una comparacion mal escrita dejaria pasar.
+    var bad_b = good;
+    std.mem.writeInt(u64, bad_b[8..16], p, .little);
+    note("fromBytes rechaza b == p", blk: {
+        if (Fp2.fromBytes(&bad_b)) |_| break :blk false else |_| break :blk true;
+    });
+
+    // p - 1 es el maximo canonico: tiene que ENTRAR. Si esto fallara, la guarda
+    // estaria rechazando de mas y la mutacion de `>=` pasaria por buena.
+    var edge = good;
+    std.mem.writeInt(u64, edge[8..16], p - 1, .little);
+    note("fromBytes acepta b == p - 1", blk: {
+        if (Fp2.fromBytes(&edge)) |back| {
+            break :blk back.b.toU64() == p - 1;
+        } else |_| break :blk false;
+    });
+}
+
 fn cmpArithmetic(a: Fp2, b: Fp2, comptime op: []const u8) !void {
     const ta = to_torus(a);
     const tb = to_torus(b);
@@ -192,6 +250,7 @@ fn cmpRoundTrip(v: Fp2) !void {
 pub fn main() !void {
     const p: u64 = (1 << 61) - 1;
     try validate_decomposition();
+    try validate_canonicality();
 
     // The corpus is chosen against where a broken conversion hides: `y != 0`
     // everywhere except one case (with `y = 0` a conversion could swap `a`

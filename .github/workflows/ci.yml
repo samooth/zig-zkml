@@ -142,3 +142,24 @@ jobs:
       # La del consumidor primero: es la que responde por la web.
       - run: zig build wasm-consumer
       - run: bash tools/wasm_portability.sh
+
+  # Los tres diferenciales. NO bloqueantes, y por el mismo motivo que el job de
+  # arriba: su salida es una tabla, no un veredicto sobre el codigo bajo prueba.
+  # Pero hasta ahora eran guiones sin entrada en build.zig y sin job, asi que su
+  # resultado vivia en el mensaje de un commit y nadie lo repetia. Entre los tres
+  # tomaron las dos decisiones mayores del repositorio — 176 lineas de campo y 828
+  # de FRI — de modo que su alcance importa mas que su cuenta.
+  #
+  # tools/pin_dir.sh desempaqueta el pin desde la cache global de Zig a partir del
+  # hash de build.zig.zon, asi que un checkout limpio no necesita nada a mano.
+  differentials:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - run: zig build field-diff
+      - run: zig build fri-conv-diff
+      - run: zig build fri-diff

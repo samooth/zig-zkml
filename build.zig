@@ -265,6 +265,47 @@ pub fn build(b: *std.Build) void {
     );
     wasm_step.dependOn(&wasm_portability.step);
 
+    // --- the three differentials, as steps -----------------------------------
+    //
+    // These were scripts with no entry point in the build system, which is the
+    // same defect as an unwatched list: their output lived in a commit message
+    // and nobody could repeat it. Three of them, and between them they decided
+    // the two largest questions in this repository — 176 lines of field and 828
+    // of FRI — so their reach matters more than their count.
+    //
+    // Each depends on the install step, because the pin's SOURCE TREE is what
+    // they read, and that tree is unpacked by the same fetch that builds the
+    // library. tools/pin_dir.sh does the unpacking and takes the hash from
+    // build.zig.zon, so a clean checkout works with no manual setup.
+    const Differential = struct {
+        name: []const u8,
+        script: []const u8,
+        what: []const u8,
+    };
+    const differentials = [_]Differential{
+        .{
+            .name = "field-diff",
+            .script = "tools/field_diff.sh",
+            .what = "libs/field.zig against the pinned M61: 17.3k checks, 0 discrepancies",
+        },
+        .{
+            .name = "fri-conv-diff",
+            .script = "tools/fri_conv_diff.sh",
+            .what = "Fp2 <-> Torus61 is the identity; byte layout and canonicality guard",
+        },
+        .{
+            .name = "fri-diff",
+            .script = "tools/fri_diff.sh",
+            .what = "own FRI composition against the pin's, over 7 parameter points",
+        },
+    };
+    for (differentials) |d| {
+        const run = b.addSystemCommand(&.{ "bash", d.script });
+        run.step.dependOn(b.getInstallStep());
+        const step = b.step(d.name, d.what);
+        step.dependOn(&run.step);
+    }
+
     // bench/fingerprint_bench.zig measures the claim arithmetic that the
     // fingerprint identity replaces: the oracle that forms the product
     // against the factored form, on the same inputs. Same rule as above — its

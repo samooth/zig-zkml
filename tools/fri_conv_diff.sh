@@ -31,7 +31,44 @@ if ! diff "$STAGE/fp2.renorm.zig" "$ROOT/libs/fri/fp2.zig" > /dev/null; then
   exit 1
 fi
 diff "$STAGE/field.renorm.zig" "$ROOT/libs/field.zig" > /dev/null || { echo "ABORTO: field.zig no es copia integra" >&2; exit 1; }
-echo "fidelidad verificada: las copias solo difieren en la linea del import"
+  # Ganchos de mutacion. El mismo diseno que field_diff.sh y fri_diff.sh: cada
+  # patron se comprueba con grep, y si no cae el script ABORTA en vez de
+  # seguir. Sin esa comprobacion un gancho puede no mutar nada y devolver un
+  # 0 que se lee como una medicion.
+  if [ -n "${FRI_CONV_DIFF_MUTATE:-}" ]; then
+    echo "MUTACION activa en MI fp2.zig: $FRI_CONV_DIFF_MUTATE"
+    case "$FRI_CONV_DIFF_MUTATE" in
+      toBytes-coords-intercambiadas)
+        # a y b se escriben en el orden contrario. Es la mutacion de mas
+        # superficie de la conversion, y el layout de bytes es justo lo que
+        # este instrumento comprueba.
+        perl -0pi -e 's/x\.a\.toBytes\(out\[0\.\.8\]\);\n(\s*)x\.b\.toBytes\(out\[8\.\.16\]\);/x.b.toBytes(out[0..8]);\n$1x.a.toBytes(out[8..16]); \/\/ MUTADO/m' "$STAGE/fp2.zig"
+        grep -q MUTADO "$STAGE/fp2.zig" || { echo "ABORTO: la mutacion no aplico" >&2; exit 2; } ;;
+      fromBytes-sin-canonico)
+        # La guarda de canonicidad pasa a comprobar SOLO a. Sigue usando las
+        # dos variables, porque quitarlas deja ra y rb sin usar y el fallo que
+        # sale es de compilacion, no del diferencial. El comentario del propio
+        # codigo dice que la guarda hace falta para que el muestreo por rechazo
+        # sea uniforme, asi que es la mutacion que mas directamente toca el
+        # transcript: a podria llegar no canonico y el parser lo aceptaria.
+        # El signo de la comparacion de b pasa de >= a >, de modo que rb == p
+        # deja de rechazarse. p es exactamente el primo: una codificacion con
+        # b == p es NO canonica, y el comentario del propio codigo dice que la
+        # guarda existe para que el muestreo por rechazo sea uniforme. Sin la
+        # guarda, un valor no canonico pasaria al transcript.
+        #
+        # El patron no lleva grupo de captura a proposito: escribirlo con
+        # parentesis escapados abre un grupo que el \) literal no cierra, y perl
+        # responde "Unmatched (" sin tocar el fichero y sin salir con codigo de
+        # error en el sitio que se mira. Por eso el guard comprueba la marca y
+        # no solo el codigo de salida.
+        perl -0pi -e 's{rb >= Goldilocks\.p\) return error\.OutOfField;}{rb > Goldilocks.p) return error.OutOfField; // MUTADO}' "$STAGE/fp2.zig"
+        grep -q MUTADO "$STAGE/fp2.zig" || { echo "ABORTO: la mutacion no aplico" >&2; exit 2; } ;;
+      *) echo "mutacion desconocida: $FRI_CONV_DIFF_MUTATE" >&2; exit 2 ;;
+    esac
+  else
+    echo "fidelidad verificada: las copias solo difieren en la linea del import"
+  fi
 
 "$ZIG" build-exe -OReleaseSafe --dep fp2_mine --dep zig-field \
   -Mroot="$ROOT/tools/fri_conv_diff.zig" \

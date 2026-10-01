@@ -11,18 +11,79 @@
 set -e
 ZIG=${ZIG:-/home/t0m4s/.zvm/0.16.0/zig}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-HASH=$(sed -n 's/.*\.hash = "zig_algebra-\(.*\)".*/\1/p' "$ROOT/build.zig.zon")
-PKG="$ROOT/zig-pkg/zig_algebra-$HASH"
-if [ ! -d "$PKG" ]; then echo "falta el pin $PKG" >&2; exit 1; fi
+. "$ROOT/tools/pin_dir.sh"
+PKG=$(pin_resolve)
 echo "pin leido de build.zig.zon: $(basename "$PKG")"
-mkdir -p "$ROOT/.zig-cache/field_diff"
+
+STAGE="$ROOT/.zig-cache/field_diff"
+mkdir -p "$STAGE"
+
+# MI LADO SE COPIA A POR ETAPAS. Antes compilaba directamente contra
+# libs/field.zig, y por eso no habia ganchos de mutacion: mutar en vivo
+# ensucia el arbol y, si el proceso muere a mitad, se deja el repositorio
+# modificado. fri_diff.sh ya copiaba por etapas por el motivo del pin; aqui el
+# motivo era el propio repositorio.
+cp "$ROOT/libs/field.zig" "$STAGE/field_mine.zig"
+
+# fidelidad: la copia solo puede diferir si una mutacion esta activa, y entonces
+# la fidelidad ya no aplica y se dice.
+mutated=0
+if [ -n "${FIELD_DIFF_MUTATE:-}" ]; then
+  echo "MUTACION activa en MI field.zig: $FIELD_DIFF_MUTATE"
+  mutated=1
+  # Cada mutacion comprueba que su patron ATTERRIZO, con grep, y aborta si no.
+  # Un print que anuncia una sustitucion que no ocurrio es el fallo mas caro
+  # que hay: el 0 que devuelve el diferencial se lee como una medicion. Asi se
+  # detecto el gancho de MI lado en fri_diff.sh, que estaba vacio.
+  case "$FIELD_DIFF_MUTATE" in
+    add-sin-reducir)
+      # La reduccion desaparece. Es la mutacion mas antigua del campo y la que
+      # mas se ha medido: sin ella, add devuelve un rep >= p.
+      perl -0pi -e 's/return \.\{ \.rep = if \(s >= p\) s - p else s \};\s*$/return .{ .rep = s }; \/\/ MUTADO/m' "$STAGE/field_mine.zig"
+      grep -q MUTADO "$STAGE/field_mine.zig" || { echo "ABORTO: la mutacion no aplico" >&2; exit 2; } ;;
+    sub-invertido)
+      # a - b pasa a ser b - a. El signo cambia en elreduction, asi que la mitad
+      # del dominio coincide por simetria y la otra mitad no.
+      perl -0pi -e 's/const d = a\.rep \+ p - b\.rep;/const d = b.rep + p - a.rep; \/\/ MUTADO/' "$STAGE/field_mine.zig"
+      grep -q MUTADO "$STAGE/field_mine.zig" || { echo "ABORTO: la mutacion no aplico" >&2; exit 2; } ;;
+    eql-reflexivo)
+      # Compara cada operando consigo mismo: siempre verdadero. La forma usa
+      # los dos parametros, porque `return true` deja parametros sin usar y el
+      # fallo que salta es de compilacion, no del diferencial.
+      perl -0pi -e 's/return a\.rep == b\.rep;/return a.rep == a.rep or b.rep == b.rep; \/\/ MUTADO/' "$STAGE/field_mine.zig"
+      grep -q MUTADO "$STAGE/field_mine.zig" || { echo "ABORTO: la mutacion no aplico" >&2; exit 2; } ;;
+    mul-shift-60)
+      # El plegado de 61 a 60 bits. La de mas superficie: toca todos los
+      # productos. La marca va al final de la linea, porque en linea se come el
+      # parentesis de cierre de @intCast y el fallo que sale es de sintaxis, no
+      # del diferencial.
+      perl -0pi -e 's/(prod >> )61(\);\s*)$/$1 60\); \/\/ MUTADO/m' "$STAGE/field_mine.zig"
+      grep -q MUTADO "$STAGE/field_mine.zig" || { echo "ABORTO: la mutacion no aplico" >&2; exit 2; } ;;
+    inv-p-menos-3)
+      # El exponente del inverso: p-2 pasa a p-3, que no es el inverso de nada.
+      perl -0pi -e 's/return a\.pow\(p - 2\);/return a.pow(p - 3); \/\/ MUTADO/' "$STAGE/field_mine.zig"
+      grep -q MUTADO "$STAGE/field_mine.zig" || { echo "ABORTO: la mutacion no aplico" >&2; exit 2; } ;;
+    neg-mas-uno)
+      perl -0pi -e 's/else p - a\.rep \};/else p - a.rep + 1 }; \/\/ MUTADO/' "$STAGE/field_mine.zig"
+      grep -q MUTADO "$STAGE/field_mine.zig" || { echo "ABORTO: la mutacion no aplico" >&2; exit 2; } ;;
+    *) echo "mutacion desconocida: $FIELD_DIFF_MUTATE" >&2; exit 2 ;;
+  esac
+else
+  # Sin mutacion, la copia TIENE que ser identica. Un fallo aqui significa que
+  # el staged quedo sucio de una corrida anterior.
+  if ! diff "$STAGE/field_mine.zig" "$ROOT/libs/field.zig" > /dev/null; then
+    echo "ABORTO: la copia de field.zig difiere del original" >&2
+    exit 1
+  fi
+fi
+
 "$ZIG" build-exe -OReleaseSafe --dep field_mine --dep zig-field \
-  -Mroot="$ROOT/tools/field_diff.zig" \
-  -Mfield_mine="$ROOT/libs/field.zig" \
-  -Mzig-field="$PKG/libs/field/src/lib.zig" \
-  --cache-dir "$ROOT/.zig-cache" --global-cache-dir "$HOME/.cache/zig" \
-  -femit-bin="$ROOT/.zig-cache/field_diff/field_diff" || exit 1
+    -Mroot="$ROOT/tools/field_diff.zig" \
+    -Mfield_mine="$STAGE/field_mine.zig" \
+    -Mzig-field="$PKG/libs/field/src/lib.zig" \
+    --cache-dir "$ROOT/.zig-cache" --global-cache-dir "$HOME/.cache/zig" \
+    -femit-bin="$STAGE/field_diff" || exit 1
 # The earlier version of this script ended in `exec`, so it built the
 # differential and never ran it, and printed nothing and exited 0. A
 # measurement that produces no output is not a measurement.
-"$ROOT/.zig-cache/field_diff/field_diff"
+"$STAGE/field_diff"
