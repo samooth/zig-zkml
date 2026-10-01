@@ -4,3 +4,7 @@ zig-pkg
 .zig-cache
 __pycache__/
 *.pyc
+
+# artefactos del chequeo de ABI: los genera un run step y los lee python,
+# asi que no pueden vivir en .zig-cache, que el sistema de compilacion poda.
+.abi-check/

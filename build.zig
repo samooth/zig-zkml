@@ -80,7 +80,18 @@ pub fn build(b: *std.Build) void {
         .root_module = abi_mod,
     });
     const run_abi = b.addRunArtifact(abi_exe);
-    run_abi.addArg(b.pathFromRoot(".zig-cache/abi-check"));
+    // Los artefactos NO van a `.zig-cache`. Ese directorio pertenece al sistema
+    // de compilacion y lo poda cuando le place: entre que el run los escribe y
+    // que el script los lee, una poda los borra y el gate falla sin causa
+    // visible. Se vio dos veces —abi y verify a la vez, y ninguno al repetir—
+    // que es la firma de una carrera con el proprio cache y no de un defecto
+    // del codigo bajo prueba.
+    //
+    // `.zig-cache` tampoco estaba en el PATH del run step, asi que el
+    // ejecutable recibia una ruta relativa que no resolvia ahi.
+    const abi_out = b.pathFromRoot(".abi-check");
+    run_abi.addArg(abi_out);
+    run_abi.setCwd(b.path("."));
     const abi_step = b.step("abi", "End-to-end C-ABI check + symbol emission");
     abi_step.dependOn(&run_abi.step);
     // Symbol assertion: every zkml_* export must be present in the lib.
@@ -104,14 +115,14 @@ pub fn build(b: *std.Build) void {
     // Python implementation (no shared code — a genuine audit, F0 §11).
     const py_proof = b.addSystemCommand(&.{
         "sh", "-c",
-        \\python3 tools/verify_weights.py proof --root "$(tr -d '\n' < .zig-cache/abi-check/root.hex)" \
-        \\  --name "$(cat .zig-cache/abi-check/name.txt)" < .zig-cache/abi-check/proof.bin
+        \\python3 tools/verify_weights.py proof --root "$(tr -d '\n' < .abi-check/root.hex)" \
+        \\  --name "$(cat .abi-check/name.txt)" < .abi-check/proof.bin
     });
     py_proof.step.dependOn(&run_abi.step);
     const py_manifest = b.addSystemCommand(&.{
         "sh", "-c",
-        \\python3 tools/verify_weights.py manifest --root "$(tr -d '\n' < .zig-cache/abi-check/root.hex)" \
-        \\  .zig-cache/abi-check/manifest.json
+        \\python3 tools/verify_weights.py manifest --root "$(tr -d '\n' < .abi-check/root.hex)" \
+        \\  .abi-check/manifest.json
     });
     py_manifest.step.dependOn(&run_abi.step);
     const py_selftest = b.addSystemCommand(&.{ "python3", "tools/verify_weights.py", "selftest" });
