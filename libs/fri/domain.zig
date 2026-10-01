@@ -296,8 +296,14 @@ test "max_log_domain is above what the library actually asks for" {
     // decision, documented at its declaration, not a fact a test can discover.
     try std.testing.expect(max_log_domain >= 8);
 
-    // And it must stay a power-of-two count a byte-per-element buffer could
-    // plausibly hold. 2^30 points is 1G: above any single AIR trace, and a
-    // buffer of it is not a thing the allocator is asked for in this codebase.
-    try std.testing.expect(max_log_domain <= 30);
+    // La asercion que ESTUVO aqui —`expect(max_log_domain <= 30)`— era una
+    // tautologia: max_log_domain ES 30, asi que aseguraba una constante contra
+    // si misma y solo podia fallar si alguien editaba el numero, lo cual no es
+    // una medicion. Parecia una prueba y no lo era.
+    //
+    // Lo que hace las veces de puerta es `tools/domain_cost.sh`, que mide el
+    // coste real del prover y el verifier en una escalera de tamanos y falla si
+    // el limite baja por debajo de la frontera medida mas un margen. Ese es el
+    // sitio donde la relacion entre el limite y lo pagable queda verificada, y
+    // por eso aqui solo queda lo que se puede derivar de los tipos.
 }

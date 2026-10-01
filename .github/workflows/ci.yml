@@ -161,5 +161,6 @@ jobs:
         with:
           version: 0.16.0
       - run: zig build field-diff
+      - run: zig build domain-cost
       - run: zig build fri-conv-diff
       - run: zig build fri-diff

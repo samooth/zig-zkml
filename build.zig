@@ -294,6 +294,11 @@ pub fn build(b: *std.Build) void {
             .what = "Fp2 <-> Torus61 is the identity; byte layout and canonicality guard",
         },
         .{
+            .name = "domain-cost",
+            .script = "tools/domain_cost.sh",
+            .what = "measured cost per domain size; gates fri.max_log_domain",
+        },
+        .{
             .name = "fri-diff",
             .script = "tools/fri_diff.sh",
             .what = "own FRI composition against the pin's, over 7 parameter points",
