@@ -260,7 +260,59 @@ zig build vllm-adapter
 zig build bench-fingerprint   # local: shells out to a full second build
 zig build wasm-consumer       # local + weekly CI, non-blocking
 zig build wasm-test-sweep     # local + weekly CI, non-blocking
+zig build field-diff          # local + weekly CI, non-blocking
+zig build fri-conv-diff       # local + weekly CI, non-blocking
+zig build fri-diff            # local + weekly CI, non-blocking
 ```
+
+### The three differentials are gates now, and their reach is measured
+
+They were scripts with no entry in `build.zig` and no job, so their output
+lived in a commit message and nobody could repeat it. Between them they
+decided the two largest questions here — 176 lines of field and 828 of FRI — so
+a measurement that decides and that nobody repeats is a claim with a manual
+oracle.
+
+| step | checks | what it decides |
+|---|---|---|
+| `field-diff` | 17,344 | `libs/field.zig` against the pinned M61 |
+| `fri-conv-diff` | 484 | `Fp2 ↔ Torus61` identity, byte layout, canonicality guard |
+| `fri-diff` | 108 | our FRI composition against the pin's, over 7 parameter points |
+
+**A gate that has never been shown to fail is not a gate**, so each carries
+named mutations that abort if the pattern did not land:
+
+| mutation | discrepancies |
+|---|---|
+| `add-sin-reducir` | 1,587 |
+| `sub-invertido` | 4,006 |
+| `eql-reflexivo` | 4,006 |
+| `mul-shift-60` | 3,848 |
+| `inv-p-menos-3` | 58 |
+| `neg-mas-uno` | 61 |
+| `toBytes-coords-intercambiadas` | 3 |
+| `fromBytes-sin-canonico` | 1 |
+| `fri-diff`, one round less, **either side** | 10 |
+
+**Two of those rows were zero until the mutations existed**, and both were in
+`fri-conv-diff`, which is the instrument that took the conversion decision:
+
+- Its byte-layout check compared **the pin against itself** — `Q.new(c0,c1)`
+  against two separately computed torus values — and never called our own
+  serializer, which is the one that would enter a transcript. Swapping `a` and
+  `b` in `Fp2.toBytes` produced **0 discrepancies across 476 checks**.
+- The canonicality guard in `fromBytes` was never exercised. Weakening `rb >= p`
+  to `rb > p` also produced **0**. The code's own comment says the guard exists
+  so rejection sampling is uniform: a documented property, not a verified one.
+
+Both are now checked, and the canonicality cases include `b == p - 1`, which
+must be *accepted* — otherwise the guard would be rejecting too much and the
+weakened version would pass as good.
+
+`tools/pin_dir.sh` unpacks the pin from Zig's global cache using the hash in
+`build.zig.zon`. Nothing created `zig-pkg/` before: the three scripts demanded a
+directory that only existed on one machine because somebody had unpacked it by
+hand, and all three failed with "falta el pin" on a clean checkout.
 
 ### The portability gate is two gates, and the split is the point
 
