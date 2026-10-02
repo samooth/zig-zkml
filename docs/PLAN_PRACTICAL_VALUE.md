@@ -100,6 +100,22 @@ Todo lo de esta sección lo exige la respuesta por fingerprint, y casi todo lo e
       de Goldilocks; convertir un resumen de bytes a un valor de campo no queda
       ligado. **Es la pieza que más fácilmente hunde un calendario.**
 - [ ] **Evaluar las tres opciones del puente y quedarse con una, por escrito.**
+      > **Medido en `ce3a51e`, y la eleccion del propietario ya la acota.**
+      > **Pesos ocultos, y las dos versiones** (`docs/decisions/ADR-0004-pesos-ocultos.md`).
+      > Que eso decide aqui, sin cerrar la casilla:
+      >
+      > - El manifiesto firmado (c) **no basta solo**: si los pesos no se publican,
+      >   no hay nada que firmar que los ata al compromiso field-native.
+      > - Quedan **(a) o (b)**, y **Poseidon2 sale favorecido por una reason que no
+      >   es de la 2.3**: es tambien lo que un Merkle necesita para ocultar en campo
+      >   pequeno, y es la unica decision de este plan que sirve a dos partes caras.
+      > - Pero Poseidon2 **no da el blinding**, y sin blinding no hay ZK. El pin no
+      >   tiene ni blinding ni compromiso ocultable: es Merkle + Blake3 sobre
+      >   Goldilocks 2^61-1.
+      >
+      > **Antes de esta casilla hay que resolver quien implementa el ZK FRI**
+      > (aportarlo al pin, o conservar el nuestro y extenderlo), porque las dos
+      > respuestas dan AIRs distintos. Decision del propietario.
       (a) compromiso field-native de los pesos dentro del AIR; (b) función hash
       compatible con el campo, Poseidon2, como puente verificable; (c) manifiesto
       firmado que una ambas representaciones, con modelo de confianza explícito.

@@ -54,8 +54,8 @@ served inference:
 | Mode | Proves | Scope |
 |---|---|---|
 | **(a) Integrity** | The output Y was produced by actually running the committed weights `root(W)` on input X | **v1 (F0–F3)** |
-| (b) Weight privacy | The prover uses W without revealing it | future extension |
-| (c) Both (zkVM-style) | (a) + (b) | out of scope (671B models) |
+| **(b) Weight privacy** | The prover uses W without revealing it | **the target** — [ADR-0004](docs/decisions/ADR-0004-pesos-ocultos.md) |
+| (c) Both | (a) + (b) *as two modes of one library*, not one proof | owner decision; needs a ZK FRI |
 
 Key design decisions, with full rationale in [docs/BLUE_PRINT.md](docs/BLUE_PRINT.md):
 
