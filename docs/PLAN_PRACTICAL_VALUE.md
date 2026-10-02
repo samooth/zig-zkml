@@ -44,7 +44,7 @@ no los alcanza, esa es la señal de que el ZK no se gana el puesto para (a) solo
 - [x] **No empezar ninguna optimización de la ruta de 10 a 23 días.** El coste está
       en el statement, no en el código: 5,91 mil millones de restricciones de STARK
       más FFT, RLC, quotient, FRI y aperturas sobre toda la traza.
-- [ ] **No ajustar el ancho de traza para agrupar MACs.** Agrupar 16 por fila baja el
+- [x] **No ajustar el ancho de traza para agrupar MACs.** Agrupar 16 por fila baja el
       tiempo de prueba unas 2,6 veces y sube verificación unas 2,9 y tamaño unas 2,6.
       El propio README ya mide el compromiso; no es un camino.
 - [ ] **Anotar en el README que la granularidad por MAC está abandonada**, para que
