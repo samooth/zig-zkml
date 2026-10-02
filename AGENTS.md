@@ -527,6 +527,18 @@ stay in the README as **historical** and are not to be refreshed.
 `zig build bench-fingerprint` is a different instrument — the fingerprint claim
 against the oracle — and this rule does not cover it.
 
+**1.2 · Do not start optimising the 10-day path.** Its cost is in the statement,
+not in the code: 5.91 billion STARK constraints, plus FFT, RLC, quotient, FRI and
+openings over the whole trace. There is nothing to optimise until the statement
+changes, and an optimisation applied to the per-element path is an optimisation
+of something the project has already decided not to ship.
+
+**1.3 · Do not widen the trace to group MACs.** Grouping 16 per row buys ~2.6×
+proving time and pays ~2.9× verification and ~2.6× proof size. The README
+already measures the trade and `libs/stark/gemm_chunk.zig` implements the worse
+side of it; the point is that the remaining headroom is not worth spending
+there.
+
 If you think one of these is wrong, say so in the commit message and change the
 plan's box — do not quietly re-run the benchmark and update the number. That is
 the failure this section exists to prevent: a figure that moves because someone

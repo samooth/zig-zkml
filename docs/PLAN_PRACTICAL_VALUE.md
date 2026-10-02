@@ -41,7 +41,7 @@ no los alcanza, esa es la señal de que el ZK no se gana el puesto para (a) solo
 - [x] **Dejar de medir por MAC.** `338 µs/MAC` y `142 µs/MAC` (`README.md:338-339`)
       miden una granularidad que ya no es el statement. Conservar las cifras como
       histórico; no volver a correr esos bancos.
-- [ ] **No empezar ninguna optimización de la ruta de 10 a 23 días.** El coste está
+- [x] **No empezar ninguna optimización de la ruta de 10 a 23 días.** El coste está
       en el statement, no en el código: 5,91 mil millones de restricciones de STARK
       más FFT, RLC, quotient, FRI y aperturas sobre toda la traza.
 - [ ] **No ajustar el ancho de traza para agrupar MACs.** Agrupar 16 por fila baja el
