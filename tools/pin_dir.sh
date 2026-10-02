@@ -33,7 +33,11 @@ pin_hash() {
 
 pin_resolve() {
     [ -n "${ROOT:-}" ] || ROOT=$(cd "$(dirname "$0")/.." && pwd)
-    ZIG=${ZIG:-/home/t0m4s/.zvm/0.16.0/zig}
+    # El mismo resolver que los otros cinco guiones. Va dentro de la funcion
+    # porque pin_dir.sh se puede cargar antes de que exista ROOT.
+    _here=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)
+    . "$_here/zig_bin.sh"
+    ZIG=$(zig_bin)
     GLOBAL_CACHE=${ZIG_GLOBAL_CACHE:-$HOME/.cache/zig}
 
     H=$(pin_hash)

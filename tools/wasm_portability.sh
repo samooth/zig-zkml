@@ -15,8 +15,13 @@
 # limitation nobody can reproduce is a rumour, and fixing one of these files
 # turns the gate red instead of silently contradicting this file.
 set -e
-ZIG=${ZIG:-/home/t0m4s/.zvm/0.16.0/zig}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+
+# El binario de Zig se resuelve UNA vez, en tools/zig_bin.sh. Estaba escrito
+# a mano en seis guiones con la ruta de una sola maquina, y en CI —donde
+# setup-zig lo pone en el PATH— todos ellos morian al instante.
+. "$ROOT/tools/zig_bin.sh"
+ZIG=$(zig_bin)
 TARGET=${1:-wasm32-freestanding}
 LOG="$ROOT/.zig-cache/wasm_portability.log"
 EXPECTED="$ROOT/tools/wasm_test_sweep_expected.txt"

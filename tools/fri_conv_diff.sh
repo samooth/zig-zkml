@@ -10,8 +10,13 @@
 # measurement of the wrong thing — so the script diffs the staged copy against
 # the original and fails unless the import line is the only difference.
 set -e
-ZIG=${ZIG:-/home/t0m4s/.zvm/0.16.0/zig}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+
+# El binario de Zig se resuelve UNA vez, en tools/zig_bin.sh. Estaba escrito
+# a mano en seis guiones con la ruta de una sola maquina, y en CI —donde
+# setup-zig lo pone en el PATH— todos ellos morian al instante.
+. "$ROOT/tools/zig_bin.sh"
+ZIG=$(zig_bin)
 HASH=$(sed -n 's/.*\.hash = "zig_algebra-\(.*\)".*/\1/p' "$ROOT/build.zig.zon")
 PKG="$ROOT/zig-pkg/zig_algebra-$HASH"
 [ -d "$PKG" ] || { echo "falta el pin $PKG" >&2; exit 1; }

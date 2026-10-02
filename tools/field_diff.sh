@@ -9,8 +9,13 @@
 # against. Measuring the wrong version is the same error as citing the right
 # version and inferring the content.
 set -e
-ZIG=${ZIG:-/home/t0m4s/.zvm/0.16.0/zig}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+
+# El binario de Zig se resuelve UNA vez, en tools/zig_bin.sh. Estaba escrito
+# a mano en seis guiones con la ruta de una sola maquina, y en CI —donde
+# setup-zig lo pone en el PATH— todos ellos morian al instante.
+. "$ROOT/tools/zig_bin.sh"
+ZIG=$(zig_bin)
 . "$ROOT/tools/pin_dir.sh"
 PKG=$(pin_resolve)
 echo "pin leido de build.zig.zon: $(basename "$PKG")"
