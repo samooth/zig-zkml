@@ -14,3 +14,4 @@ include/kt_kernel.h    checkout hermano ktransformers-zig, no este repositorio
 gguf.h                 cabecera de llama.cpp, del checkout hermano
 zkml_c.h               nuestra, pero se cita por su nombre de cabecera; el fichero real es include/zkml_c.h
 libs/field/src/predef/m61.zig   ruta DENTRO del paquete pinneado, no de este repositorio; el numero de linea se quito porque un fichero vivo la mueve
+libs/verify            NO EXISTE. La cita es del propietario y se conserva literal; la correccion esta inmediatamente debajo, en el mismo fichero, con la fecha y el motivo. Exenta por eso y no porque la ruta valga.

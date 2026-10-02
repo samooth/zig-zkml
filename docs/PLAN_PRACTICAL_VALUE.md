@@ -157,6 +157,24 @@ empieza por lo pequeño y no por la geometría de 671B.**
   834 veces sobre 2048x1408x2048
 - Puertas: trece, con mutación detrás
 - Empaquetado: `libs/prove` y `libs/verify` ya usan el FRI del pin
+  > **Corrección (2026-10-02), y lo que se encontró al empezar.** El directorio
+  > **no existe**: no hay tal directorio en el repositorio. Se nombra sin su
+  > ruta porque nombrarla con ruta la haria parecer existente. Y de los dos que
+  > menciona el nombre, **ninguno** usa hoy el FRI del pin.
+  >
+  > Se intentó dos veces y no se puede completar: el pin llama a
+  > `transcript.challengeFieldChecked(F)` y nuestro transcript expone
+  > `challengeField(F)` sin la variante `Checked`. Añadirla cambia la
+  > derivación de desafíos del transcript y cambia los bytes de **toda** prueba.
+  > Eso es una migración de protocolo, no un refactor.
+  >
+  > Lo que sí salió de los intentos es un defecto real y distinto, encontrado
+  > porque por fin hay un test que llama a la API pública: `flattenToFp2` pone
+  > `.b = 0` en cada punto, y quedarse con la coordenada real de un polinomio
+  > sobre F_p² no conserva el grado bajo respecto al toro. **La API pública de
+  > `libs/prove` no produce pruebas que su propio verificador acepte**, y hasta
+  > ahora no lo sabíamos porque el test existente llama a `fri.prove` directo y
+  > se salta `flattenToFp2` por completo.
 - F0 y F1 completos
 - Puentes de citas en documentos: `zig build doc-paths`
 

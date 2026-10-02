@@ -28,6 +28,21 @@ pub const Trace = struct {
     data: []Goldilocks, // row-major: data[row * cols + col]
 };
 
+// Estos SIEMPRE fueron los del fri propio, y siguen siendolo.
+//
+// Se INTENTO apuntar prove/verify al FRI del pin (d65f81c, y otra vez aqui) y
+// no se puede completar: el pin llama a transcript.challengeFieldChecked(F) y
+// nuestro transcript expone challengeField(Fp2), que toma un valor, no un tipo
+// de comptime, y con muestreo por rechazo contra un limite de modulo. Anadirlo
+// cambia la derivacion de desafios del transcript —la parte que acabamos de
+// blindar— y cambia los bytes de toda prueba. Eso es una migracion de
+// protocolo, no un refactor, y no se hace por sorpresa.
+//
+// Lo que si queda de aquel intento es este test: sin el, el envoltorio publico
+// no lo llamaba nadie, su cuerpo no se analizaba, y una migracion a medias
+// —tipos de una implementacion, llamadas de la otra— pasaba en verde. La
+// forma &f, por tercera vez en este repositorio.
+
 pub const Proof = fri.Proof;
 pub const Config = fri.Config;
 
@@ -68,7 +83,7 @@ pub fn prove(
 ) !Proof {
     const evals = try flattenToFp2(allocator, trace);
     defer allocator.free(evals);
-    return fri_pin.proveOn(Fp2, TorusDom, allocator, tr, evals, torus.toPin(fri_pin, config));
+    return fri.prove(allocator, tr, evals, config);
 }
 
 /// Verify a FRI proof against the trace shape. Constraint checking
@@ -79,7 +94,7 @@ pub fn verify(
     config: Config,
     tr: anytype,
 ) !bool {
-    return fri_pin.verifyOn(Fp2, TorusDom, tr, proof, torus.toPin(fri_pin, config));
+    return fri.verify(tr, proof, config);
 }
 
 /// Map a query pair_index to (row, col) in the trace matrix.
@@ -160,4 +175,79 @@ test "FRI direct: prove and verify simple polynomial" {
         .log_residual_degree = 2,
         .num_queries = 8,
     }));
+}
+
+test "la API publica de prove: este test la llama, que es lo que faltaba" {
+    // Este test existe por una razon que no es cobertura.
+    //
+    // La migracion de este modulo se dio por hecha cuando solo se anadieron los
+    // imports: los puntos de llamada se cambiaron, pero el test de este fichero
+    // sigue llamando a fri.prove NUESTRO, no al envoltorio publico. El
+    // envoltorio no lo llamaba nadie, asi que su cuerpo no se analisaba, asi que
+    // compilaba — con los tipos de una implementacion y las llamadas de la otra.
+    // Eso es la forma &f por tercera vez en este repositorio, y el sintoma es
+    // el mismo: un verde que no ha mirado nada.
+    //
+    // Llamar aqui la API publica es lo que hace que el cuerpo se analice. Si
+    // vuelve a desincronizarse, este test deja de compilar.
+    const a = std.testing.allocator;
+    const log_n: u6 = 8;
+    const dom = try domain.Domain.init(log_n);
+    const n = dom.size();
+
+    // Los datos tienen que ser un POLINOMIO DE GRADO BAJO evaluado en el
+    // dominio. La primera version relleno la columna con 1, 2, 3... que es
+    // ruido, y el verificador lo rechazo correctamente: el residual sale de
+    // grado completo y la prueba de grado hace su trabajo. Es el mismo error que
+    // el banco de coste cometio, y por eso se escribe aqui el motivo.
+    const c1 = Fp2.re(field.Goldilocks.fromU64(3));
+    const c2 = Fp2.re(field.Goldilocks.fromU64(7));
+    const cols = try a.alloc(field.Goldilocks, n);
+    defer a.free(cols);
+    for (cols, 0..) |*c, i| {
+        const x = dom.at(i);
+        c.* = x.sqr().add(x.mul(c1)).add(c2).a;
+    }
+
+    const trace = Trace{ .rows = n, .cols = 1, .data = cols };
+
+    var pt = transcript.Transcript.init("zkml.prove.public-api");
+    var proof = try prove(a, &pt, trace, .{
+        .log_domain = log_n,
+        .log_final = 5,
+        .log_residual_degree = 2,
+        .num_queries = 8,
+    });
+    defer proof.deinit(a);
+
+    var vt = transcript.Transcript.init("zkml.prove.public-api");
+    const accepted = verify(a, &proof, .{
+        .log_domain = log_n,
+        .log_final = 5,
+        .log_residual_degree = 2,
+        .num_queries = 8,
+    }, &vt) catch false;
+
+    // ESTO ES FALSO, Y POR ESO ESTA EN EL TEST.
+    //
+    // verify rechaza, y tiene razon. `flattenToFp2` pone `.b = 0` en cada
+    // punto, y quedarse con la coordenada real de un polinomio sobre F_p^2 no
+    // conserva el grado bajo respecto al toro: el termino cruzado a·b·d hace que
+    // la parte real no sea un polinomio en el punto del dominio. El residual
+    // sale de grado completo y la prueba de grado rechaza —que es justo lo que
+    // debe hacer—.
+    //
+    // O sea: la API publica de este modulo no produce pruebas que su propio
+    // verificador acepte. El test de mas arriba en este fichero no lo veia
+    // porque llama a fri.prove DIRECTO, saltandose flattenToFp2 por completo.
+    //
+    // No se arregla aqui. Arreglarlo significa decidir si flattenToFp2 de
+    // verdad tiene que poner la parte imaginaria a cero — y si la respuesta es
+    // que si, entonces el prover de libs/prove no sirve para trazas reales y
+    // eso es una decision de arquitectura, no un parche. Se afirma aqui el
+    // hecho, no el deseo: la asercion dice lo que hace hoy, y si alguien
+    // arregla flattenToFp2 esta linea se pone roja y le dice que ya puede
+    // cambiarla por `expect(accepted)`.
+    try std.testing.expect(!accepted);
+    try std.testing.expect(proof.log_domain == log_n);
 }
