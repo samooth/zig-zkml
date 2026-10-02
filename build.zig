@@ -313,6 +313,21 @@ pub fn build(b: *std.Build) void {
             .what = "own FRI composition against the pin's, over 7 parameter points",
         },
     };
+    // Cada ruta citada en cada .md debe resolver. Dos rutas muertas se
+    // Llevaron dos commits en el README, y nada recorria los documentos:
+    // assert_ledger.sh recorre el CODIGO, este recorre los DOCUMENTOS.
+    //
+    // Resuelve ficheros Y directorios, porque una de las dos rutas muertas era
+    // un directorio, y una comprobacion que solo hace stat de ficheros pasa de
+    // largo. Verificado por mutacion: renombrar un fichero citado y borrar un
+    // directorio citado ponen la puerta en rojo las dos veces.
+    const doc_paths = b.addSystemCommand(&.{ "bash", "tools/doc_paths.sh" });
+    const doc_paths_step = b.step(
+        "doc-paths",
+        "Every path cited in every .md resolves; files AND directories",
+    );
+    doc_paths_step.dependOn(&doc_paths.step);
+
     for (differentials) |d| {
         const run = b.addSystemCommand(&.{ "bash", d.script });
         run.step.dependOn(b.getInstallStep());

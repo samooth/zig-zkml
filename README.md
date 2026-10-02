@@ -91,27 +91,48 @@ borrowed from `zig-algebra` is `zig-merkle`, the Merkle tree used for column
 commitments in exactly two places (`libs/stark/commit.zig`,
 `libs/fri/root.zig`). `zig-zk` is not consumed.
 
-**Why the FRI is our own — and when that stopped holding.** The norm-1 torus of
-F_{p²} has order `p + 1`, and a clean 2-adic subgroup — the one the degree test
-needs — requires `p + 1` to be *exactly* a power of two. Our Goldilocks is
+**Why the FRI was ours, and why it stopped being a reason.** The norm-1 torus
+of F_{p²} has order `p + 1`, and a clean 2-adic subgroup — the one the degree
+test needs — requires `p + 1` to be *exactly* a power of two. Our Goldilocks is
 `p = 2⁶¹ − 1`, so `p + 1 = 2⁶¹` and the torus order is a pure power of two,
 which also makes halving exact (`1/x` on the torus is the conjugate).
 
 That argument was written against `zig-algebra` v0.5.2, whose only Goldilocks is
-`p = 2⁶⁴ − 2³² + 1`: there `p + 1 = 2·(odd)` and the property is unavailable
+`p = 2⁶⁴ − 2³² + 1`: there `p + 1 = 2·(odd)` and the property was unavailable
 upstream. **It is no longer unavailable.** v0.6.0 ships
-`libs/field/src/predef/m61.zig:12` as `zf.Field(2305843009213693951)` — which is
-`2⁶¹ − 1`, the same modulus, with the same `p + 1 = 2⁶¹`. The field argument
-therefore no longer separates our FRI from the pin's. It is kept here because a
-reason that expired in a pin bump is worse than an absent one, not because it
-still holds.
+`libs/field/src/predef/m61.zig` as `zf.Field(2305843009213693951)` — which is
+`2⁶¹ − 1`, the same modulus, with the same `p + 1 = 2⁶¹`. A pin bump had
+exhausted the one property the fork rested on.
 
-What remains is a decision rather than a property. `tools/fri_diff.sh` measures
-the two compositions equal — 24 checks, 0 discrepancies, with each side mutated
-in turn — so the residual cost is the transcript: the pin rejects toward each
-type and samples `challengeField(Fp2)` and `challengeField(Q)` independently, so
-proof bytes are not identical. Adopting it is a different wire format, not just
-different code. Checked at v0.6.0, `0cc3a6c`.
+What replaced it was measurement, not another argument. Three gates decide it,
+each with named mutations that abort if the pattern did not land:
+
+| gate | checks | what it measures |
+|---|---|---|
+| `zig build field-diff` | 17,344 | our M61 against the pinned one, 0 discrepancies |
+| `zig build fri-conv-diff` | 484 | `Fp2 ↔ Torus61` is the identity, byte layout and canonicality guard |
+| `zig build fri-diff` | 108 | our FRI composition against the pin's, over 7 parameter points |
+
+So the prover and the verifier moved to the pin (`d65f81c`), with one finding
+that a script cannot have guessed: the pin's generic `prove`/`verify` build
+`Domain(F)`, and on a quadratic extension that path has a stale error set and
+`primitiveRootOfUnity` does not terminate — hence `proveOn` with an explicit
+`TorusDomain`, the same path `fri_diff` had been using. `Fp2` stayed ours
+throughout: the pin's FRI is generic over its field, so the 28 files that write
+`Fp2` in the AIR layer did not move.
+
+The cost was measured rather than assumed. `zig build domain-cost` walks a
+ladder of domain sizes: the prover grows about **4× per doubling** (measured
+3.3–6.2 across runs) and the verifier stays flat, and 2²⁰ is the largest domain
+payable on the machine that ran it. That is why the prover's own domain bound
+sits where it does — a resource limit roughly six orders of magnitude above
+anything payable, not a performance promise.
+
+**Not everything in `libs/fri` was FRI.** The pin has no FFT — its `poly`
+package is dense univariate arithmetic with comptime-known degree — and the
+pin's FRI takes its evaluations from the caller, so `fft.zig` stayed. Counting
+"828 lines" put `fp2.zig`, the field extension the whole AIR layer is written
+against, in the FRI's column.
 
 ### Layout
 

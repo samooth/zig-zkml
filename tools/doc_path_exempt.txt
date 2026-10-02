@@ -1,0 +1,16 @@
+# Rutas citadas en documentos .md que NO son de este repositorio.
+#
+# Cada excepcion dice a quien pertenece y por que. Una lista sin motivo es
+# una lista: alguien la amplia la proxima vez que una ruta le moleste, y la
+# puerta deja de distinguir lo nuestro de lo de al lado.
+#
+# Formato:  <ruta>  <motivo>
+#
+# Nota: esto NO es una puerta con la lista. Es una lista de la puerta, y por eso
+# lleva motivo, igual que tools/wasm_test_sweep_expected.txt. La puerta imprime
+# cuantas exenciones ha usado, para que subir el numero sea visible.
+
+include/kt_kernel.h    checkout hermano ktransformers-zig, no este repositorio
+gguf.h                 cabecera de llama.cpp, del checkout hermano
+zkml_c.h               nuestra, pero se cita por su nombre de cabecera; el fichero real es include/zkml_c.h
+libs/field/src/predef/m61.zig   ruta DENTRO del paquete pinneado, no de este repositorio; el numero de linea se quito porque un fichero vivo la mueve

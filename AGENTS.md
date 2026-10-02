@@ -482,7 +482,7 @@ list without looking, which is moving the figure so the door stops complaining
 output changes what you do with it, and that is worse than a broken gate,
 because a broken gate is visible.**
 
-Which is why the list is a contract: a file leaves `tools/wasm_expected.txt`
+Which is why the list is a contract: a file leaves `tools/wasm_test_sweep_expected.txt`
 in the same commit that fixes it, and that commit says which file left and
 why. A list that goes from nine to eight with no explanation is a claim that
 moved on its own. The rule exists so that "move the list" stops being a

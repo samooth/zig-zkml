@@ -773,8 +773,14 @@ publica un tag incompatible se prefiere un fork propio sobre mezclar versiones.
 - **Determinismo**: mismo witness multi-thread → mismo hash de transcript →
   misma seed FS (2 ejecuciones, mismo proof). Test implementado en
   `libs/trace/root.zig` (4 threads vs single-thread, mismo hash).
-- **ABI**: reusar `tools/verify_abi.py` (exports+arity) y
-  `tools/audit_layout.py`; `nm` para emisión real de símbolos (v1 y v2).
+- **ABI**: `zig build abi` ya cubre la superficie —emite los símbolos, los
+  comprueba contra `nm` y recorre el ciclo de vida completo por la C API— y
+  `tools/verify_weights.py` la re-deriva desde Python sin compartir código. Las
+  dos herramientas que este documento citaba aquí —`verify_abi.py` y
+  `audit_layout.py`, ambas bajo `tools/`— **nunca se escribieron**: no hay commit
+  que las creara ni ninguno que las borrara. Se nombran sin su ruta porque
+  nombrarlas con ruta las haría parecer existentes. Lo que las cubría existe bajo
+  otros nombres, así que la cita afirmaba que había una puerta donde había un plan.
 - **Adapters**: cada adapter shippea test negativo (byte corrupto → root
   cambia / verify rechaza) cross-checkeado contra `verify_weights.py`.
 - **Bench**: extensión de `bench/gemm_bench.zig` midiendo overhead prover
