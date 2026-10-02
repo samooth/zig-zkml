@@ -511,6 +511,27 @@ remote would have seen a green commit and no red one underneath.
 So: after a dependency bump, re-read the compile output, not just the exit
 codes. An amended commit is green by the time anyone sees it.
 
+## Work that is stopped, and why
+
+`docs/PLAN_PRACTICAL_VALUE.md` §1. These are not style preferences. Each is a
+measurement that was taken, understood, and found to describe a statement the
+project no longer has — so re-taking it produces a number about the wrong
+thing, which is the same error as citing the right file and inferring the
+content.
+
+**1.1 · Do not re-run the per-MAC benchmarks.** `zig build bench` drives
+`bench/gemm_bench.zig`, which measures 1 MAC/row against 16 MACs/row. That
+granularity is not the statement: the statement is a whole model run, and the
+fingerprint identity changes it to O(m+n) instead of O(m·n·k). The µs/MAC figures
+stay in the README as **historical** and are not to be refreshed.
+`zig build bench-fingerprint` is a different instrument — the fingerprint claim
+against the oracle — and this rule does not cover it.
+
+If you think one of these is wrong, say so in the commit message and change the
+plan's box — do not quietly re-run the benchmark and update the number. That is
+the failure this section exists to prevent: a figure that moves because someone
+re-measured it, with no statement having changed.
+
 ## Soundness rules that are not negotiable
 
 From `.private/TODO.md` §8. These are the ones that have already cost a bug.
