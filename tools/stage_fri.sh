@@ -39,10 +39,46 @@ _fri_check_fidelity() {
         -e 's|@import("\./transcript\.zig")|@import("../transcript.zig")|' \
         -e 's|@import("\./\([a-z0-9]*\)\.zig")|@import("../torus/\1.zig")|' \
         "$_f" > "$_f.renorm.zig"
-    diff "$_f.renorm.zig" "$_orig" > /dev/null || {
-        echo "ABORTO: $(basename "$_orig") difiere del original mas alla de los imports" >&2
+    # El original sale de GIT, no del arbol de trabajo.
+    #
+    # Comparar la copia staged contra el fichero del arbol es comparar una cosa
+    # consigo misma en cuanto el arbol se vacia: un fichero de cero bytes hace
+    # que AMBOS lados sean cero bytes, el diff pasa, y la puerta dice "fidelidad
+    # verificada" sobre una copia vacia. Medido: con libs/fri/root.zig vacio,
+    # fri_diff.sh.imprimio "fidelidad verificada" y solo lo cazó el compilador,
+    # mas abajo. Un fichero vacio es exactamente la forma A.eql(A) un nivel mas
+    # abajo.
+    #
+    # La verdad es el commit, no el arbol: asi un fichero vaciado o editado a
+    # proposito se detecta aqui y no por el compilador mas tarde.
+    _tracked=$(git -C "$ROOT" ls-files --error-unmatch "$_orig" 2>/dev/null || true)
+    _truth=/tmp/_stage_fri_truth.$$
+    if [ -n "$_tracked" ]; then
+        git -C "$ROOT" show "HEAD:$_tracked" > "$_truth" 2>/dev/null || {
+            echo "ABORTO: no puedo leer $_tracked del commit" >&2
+            return 1
+        }
+    else
+        cp "$_orig" "$_truth"
+    fi
+    # Un fichero de cero bytes no es una copia: se dice aqui y no mas abajo,
+    # donde el sintoma aparece como un error de compilacion que no señala la
+    # causa.
+    if [ ! -s "$_truth" ]; then
+        echo "ABORTO: $(basename "$_orig") esta VACIO. Una copia de nada no es" >&2
+        echo "  una copia; y un diff contra un fichero vacio pasa siempre." >&2
+        rm -f "$_truth"
+        return 1
+    fi
+    diff "$_f.renorm.zig" "$_truth" > /dev/null || {
+        echo "ABORTO: $(basename "$_orig") difiere del commit HEAD mas alla de los imports" >&2
+        echo "  Lo mas probable es que lo tengas EDITADO SIN COMMITEAR: el" >&2
+        echo "  staged compara contra HEAD a proposito, asi que una modifica" >&2
+        echo "  sin commitear hace que la puerta disagrees de lo que mides." >&2
+        rm -f "$_truth"
         return 1
     }
+    rm -f "$_truth"
 }
 
 # stage_fri <stage_dir> [mutated]
