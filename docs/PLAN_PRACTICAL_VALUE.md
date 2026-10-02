@@ -82,7 +82,19 @@ Todo lo de esta sección lo exige la respuesta por fingerprint, y casi todo lo e
       *después* de fijar todos los compromisos. Es el punto donde el sistema se
       rompe si está mal, y el orden de compromisos ya está implementado y medido
       (`README.md:308-314`).
-- [ ] **Puente verificable entre `root(W)` y el compromiso field-native.** No es una
+- [ ] **Puente verificable entre `root(W)` y el compromiso field-native.**
+      > **Medido en `17d6674`, y el hueco es mayor de lo que dice esta casilla.**
+      > **No existe el puente a ningun nivel.** `StatementLayer` lleva
+      > `weights_root` y tiene siete pruebas buenas, pero nadie fuera de su propio
+      > fichero construye uno ni llama a `hash()`: ningun hash de statement llega
+      > a ningun transcript. El unico enlace con la superficie publica es
+      > `_ = &statement.StatementLayer.serialize;` en `zkml.zig:53`, que analiza
+      > la firma y no el cuerpo.
+      >
+      > Antes de elegir entre las tres opciones de la casilla siguiente hay que
+      > responder **que consume la statement**: las tres construyen un puente hacia
+      > un consumidor que hoy no existe. Detalle y las tres preguntas en
+      > `docs/decisions/ADR-0003-statement-nobody-reads.md`. No es una
       tarea más: es la que hace que la prueba signifique algo. `root(W)` prueba la
       identidad del artefacto con Merkle y Blake3; el backend trabaja con elementos
       de Goldilocks; convertir un resumen de bytes a un valor de campo no queda
