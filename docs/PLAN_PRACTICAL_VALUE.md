@@ -78,7 +78,7 @@ no los alcanza, esa es la señal de que el ZK no se gana el puesto para (a) solo
 Todo lo de esta sección lo exige la respuesta por fingerprint, y casi todo lo exige
 **más** que la ruta por MAC. Nada de esto se toca en el punto 1.
 
-- [ ] **Transcript y ligadura Fiat–Shamir.** Con fingerprint, `u` y `v` se derivan
+- [x] **Transcript y ligadura Fiat–Shamir.** Con fingerprint, `u` y `v` se derivan
       *después* de fijar todos los compromisos. Es el punto donde el sistema se
       rompe si está mal, y el orden de compromisos ya está implementado y medido
       (`README.md:308-314`).

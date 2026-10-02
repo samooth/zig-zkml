@@ -263,11 +263,23 @@ test "the challenge cannot be drawn before the commitments are absorbed" {
     defer a.free(bad_u);
     const bad_v = a.alloc(Fp2, n) catch unreachable;
     defer a.free(bad_v);
+    // This must be an exact mirror of bindMatrices with only the order swapped.
+    // It previously absorbed the commitments but neither the shape nor the
+    // domain separators, so it differed from the real path for reasons other
+    // than the one under test, and it passed against a build that drew the
+    // challenge first. A guard that cannot fail for its own reason is not a
+    // guard.
+    t_bad.absorbBytes(DOM_U);
     for (bad_u) |*e| e.* = t_bad.challengeField(Fp2);
+    t_bad.absorbBytes(DOM_V);
     for (bad_v) |*e| e.* = t_bad.challengeField(Fp2);
+    var bad_shape: [16]u8 = undefined;
+    std.mem.writeInt(u64, bad_shape[0..8], @intCast(m), .little);
+    std.mem.writeInt(u64, bad_shape[8..16], @intCast(n), .little);
     t_bad.absorbBytes(DOM_COMMIT);
     t_bad.absorbBytes(&a_root);
     t_bad.absorbBytes(&b_root);
+    t_bad.absorbBytes(&bad_shape);
 
     var same = true;
     for (good.u, bad_u) |x, y| {
