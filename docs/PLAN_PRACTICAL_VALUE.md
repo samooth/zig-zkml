@@ -27,8 +27,28 @@ establecen (a) sin ZK.
 | **no, y el modelo es grande** | **una prueba sucinta** | **sí, y es F3** |
 
 **Esta es una frase y se decide antes de escribir código.** Sale del caso de uso
-concreto, no de la hoja de ruta. Está sin responder y todo lo de abajo depende de
-ella.
+concreto, no de la hoja de ruta.
+
+> **Respuesta (2026-10-02): «no puede, y el modelo es grande».** Es la tercera
+> fila: para (a) basta una prueba sucinta, **el ZK hace falta y es F3**.
+>
+> Qué deja de ser opcional con esa respuesta, y qué no:
+>
+> - **La sección 3 se activa.** Geometría fija, un formato, una capa, el AIR del
+>   fingerprint y el FRI. Es la ruta, no un afterthought.
+> - **El criterio de parada de la sección 7 pasa agovernar.** Es "los criterios de
+>   F3 no se alcanzan", y con esta respuesta se cumple una sola vez: o se alcanzan
+>   `proof < 1 MB`, `verify < 100 ms` y `±1 ulp rejected`, o la respuesta es
+>   manifiesto más reproducibilidad.
+> - **La sección 2 no cambia.** Sigue siendo prerrequisito, y lo que se abandona si
+>   el ZK no llegara sigue siendo el AIR por MAC, nunca el sustrato.
+> - **Aparece una decisión nueva en la 7:** si (a) necesita ZK, entonces el
+>   objetivo (b) deja de ser la única razón del ZK, y (b) sigue siendo extensión
+>   futura. Esa decisión es del propietario.
+>
+> La ruta que lleva al número ya no es nuestra: el FRI es del pin y la migración
+> está bloqueada en `challengeFieldChecked`. **El resultado medido de F3 depende de
+> un cambio de protocolo todavía sin decidir.**
 
 Los criterios de F3 ya la responden solos si se alcanzan: `proof < 1 MB`,
 `verify < 100 ms`, `±1 ulp rejected` (`README.md:262`). **Si la ruta del fingerprint
