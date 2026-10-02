@@ -47,7 +47,7 @@ no los alcanza, esa es la señal de que el ZK no se gana el puesto para (a) solo
 - [x] **No ajustar el ancho de traza para agrupar MACs.** Agrupar 16 por fila baja el
       tiempo de prueba unas 2,6 veces y sube verificación unas 2,9 y tamaño unas 2,6.
       El propio README ya mide el compromiso; no es un camino.
-- [ ] **Anotar en el README que la granularidad por MAC está abandonada**, para que
+- [x] **Anotar en el README que la granularidad por MAC está abandonada**, para que
       las cifras de 338 y 142 no se lean como una meta viva. Una cifra con su papel
       de cifra histórica necesita decirlo.
 

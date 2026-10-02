@@ -351,6 +351,16 @@ far whole-model proving goes is a moving target and this document does not
 claim a figure for it; the prior-art survey in `docs/archive/zkML.md` is the
 historical reading, and it is dated.
 
+> **The 338 and 142 µs/MAC rows are historical, and that is their whole job.**
+> Per-MAC granularity is no longer the statement: the statement is a whole model
+> run, and the fingerprint identity changes it to O(m+n) instead of O(m·n·k).
+> They are kept because they are the measurement that killed the per-element
+> path, not because they measure anything we intend to build. **Do not refresh
+> them and do not optimise against them** — the number a roadmap quotes has to
+> be the number the plan is aiming at, and these stopped being that. The rules
+> are in `AGENTS.md` § *Work that is stopped*, and the reason is in
+> `docs/PLAN_PRACTICAL_VALUE.md` §1.
+
 ## Requirements
 
 - Zig `0.16.0` stable. A `0.16.0-dev` build happens to pass today, but it
