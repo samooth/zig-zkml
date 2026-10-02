@@ -13,7 +13,7 @@
 //! commitments in a proof share one hashing discipline.
 
 const std = @import("std");
-const fp2 = @import("../fri/fp2.zig");
+const fp2 = @import("../torus/fp2.zig");
 const merkle_pkg = @import("zig-merkle");
 
 pub const Fp2 = fp2.Fp2;

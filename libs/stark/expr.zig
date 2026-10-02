@@ -28,7 +28,7 @@
 //! is a deliberate gap rather than a silent mis-proof.
 
 const std = @import("std");
-const fp2 = @import("../fri/fp2.zig");
+const fp2 = @import("../torus/fp2.zig");
 
 pub const Fp2 = fp2.Fp2;
 pub const Goldilocks = fp2.Goldilocks;

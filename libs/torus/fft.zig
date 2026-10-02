@@ -8,7 +8,7 @@
 //! separate twiddle-inverse table.
 //!
 //! Layout: natural order in, natural order out (bit-reversal is applied
-//! and undone internally), matching libs/fri/domain.zig `Domain.at(i) =
+//! and undone internally), matching libs/torus/domain.zig `Domain.at(i) =
 //! step_gen^i` — so an evaluation vector can be handed straight to FRI.
 //!
 //! It lives here, not under libs/stark, because FRI needs it too: the

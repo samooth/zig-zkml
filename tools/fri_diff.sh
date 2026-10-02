@@ -12,43 +12,15 @@ PKG="$ROOT/zig-pkg/zig_algebra-$HASH"
 [ -d "$PKG" ] || { echo "falta el pin $PKG" >&2; exit 1; }
 echo "pin leido de build.zig.zon: $(basename "$PKG")"
 
-STAGE="$ROOT/.zig-cache/fri_diff"
-mkdir -p "$STAGE"
+  STAGE="$ROOT/.zig-cache/fri_diff"
+  # El staging vive en tools/stage_fri.sh, no aqui. Este guion tenia su propia
+  # copia —veinte lineas de sed con su comprobacion de fidelidad— y cuando los
+  # ficheros se movieron la copia se quedo por detras del helper, que es
+  # exactamente el fallo que justificaba extraerlo: una solucion que vive
+  # dentro de la herramienta que la necesita no es una solucion.
+  . "$ROOT/tools/stage_fri.sh"
+  stage_fri "$STAGE"
 
-cp "$ROOT/libs/field.zig" "$STAGE/field.zig"
-sed 's|@import("../field.zig")|@import("./field.zig")|' \
-  "$ROOT/libs/fri/fp2.zig" > "$STAGE/fp2.zig"
-for f in root domain fft fp2; do
-  sed 's|@import("../field.zig")|@import("./field.zig")|; s|@import("../merkle.zig")|@import("./merkle.zig")|; s|@import("../transcript.zig")|@import("./transcript.zig")|; s|@import("fp2.zig")|@import("./fp2.zig")|; s|@import("domain.zig")|@import("./domain.zig")|; s|@import("fft.zig")|@import("./fft.zig")|; s|@import("root.zig")|@import("./root.zig")|' \
-    "$ROOT/libs/fri/$f.zig" > "$STAGE/$f.zig"
-done
-cp "$ROOT/libs/merkle.zig" "$STAGE/merkle.zig"
-cp "$ROOT/libs/transcript.zig" "$STAGE/transcript.zig"
-sed 's|@import("torus.zig")|@import("./torus.zig")|' "$PKG/libs/fri/src/root.zig" > "$STAGE/pin_root.zig"
-cp "$PKG/libs/fri/src/torus.zig" "$STAGE/torus.zig"
-# Sin envoltorio: un fichero no puede pertenecer a dos modulos, asi que todo
-# mi lado cuelga de UN modulo, `fri_mine`, que ya reexporta Fp2 y Domain. Un
-# envoltorio de una linea daria dos definiciones de Fp2 en el binario.
-
-# fidelidad: la copia solo puede diferir en las lineas de import reescritas
-fail=0
-for f in fp2 root domain fft fp2; do
-  : # los nombres se solapan a proposito; se comprueba la unicidad abajo
-done
-for f in root domain fft; do
-  sed 's|@import("./field.zig")|@import("../field.zig")|; s|@import("./merkle.zig")|@import("../merkle.zig")|; s|@import("./transcript.zig")|@import("../transcript.zig")|; s|@import("./fp2.zig")|@import("fp2.zig")|; s|@import("./domain.zig")|@import("domain.zig")|; s|@import("./fft.zig")|@import("fft.zig")|; s|@import("./root.zig")|@import("root.zig")|' \
-    "$STAGE/$f.zig" > "$STAGE/$f.renorm.zig"
-  diff "$STAGE/$f.renorm.zig" "$ROOT/libs/fri/$f.zig" > /dev/null || { echo "ABORTO: $f.zig difiere mas alla del import" >&2; fail=1; }
-done
-sed 's|@import("./field.zig")|@import("../field.zig")|' "$STAGE/fp2.zig" > "$STAGE/fp2.renorm.zig"
-diff "$STAGE/fp2.renorm.zig" "$ROOT/libs/fri/fp2.zig" > /dev/null || { echo "ABORTO: fp2.zig difiere" >&2; fail=1; }
-diff "$STAGE/field.zig" "$ROOT/libs/field.zig" > /dev/null || { echo "ABORTO: field.zig no es copia integra" >&2; fail=1; }
-diff "$STAGE/merkle.zig" "$ROOT/libs/merkle.zig" > /dev/null || { echo "ABORTO: merkle.zig no es copia integra" >&2; fail=1; }
-sed 's|@import("./torus.zig")|@import("torus.zig")|' "$STAGE/pin_root.zig" > "$STAGE/pin_root.renorm.zig"
-diff "$STAGE/pin_root.renorm.zig" "$PKG/libs/fri/src/root.zig" > /dev/null || { echo "ABORTO: la copia del pin difiere del original" >&2; fail=1; }
-diff "$STAGE/transcript.zig" "$ROOT/libs/transcript.zig" > /dev/null || { echo "ABORTO: transcript.zig no es copia integra" >&2; fail=1; }
-[ "$fail" = 0 ] || exit 1
-echo "fidelidad verificada: las copias solo difieren en las lineas de import"
 
   # Ganchos de mutacion, para probar que el diferencial muerde por los DOS lados.
 # Mutan la COPIA por etapas de .zig-cache, nunca zig-pkg: el pin es otro

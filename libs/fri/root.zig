@@ -39,10 +39,10 @@
 //! ≈ (d/|H|)^-queries shaped by the codeword distance.
 
 const std = @import("std");
-const fp2 = @import("fp2.zig");
-const domain = @import("domain.zig");
+const fp2 = @import("../torus/fp2.zig");
+const domain = @import("../torus/domain.zig");
 const merkle_pkg = @import("zig-merkle");
-const fft = @import("fft.zig");
+const fft = @import("../torus/fft.zig");
 
 /// Blake3 adapter for zig-merkle's `H.hashBytes` node-hash interface.
 const NodeHash = struct {
@@ -316,7 +316,7 @@ const halves_inv = (fp2.Goldilocks.p + 1) / 2;
 /// elimination: O(m^3) field operations with m = 2^log_final, which for a
 /// 512-row trace meant m = 1024 and ~15 seconds of proving for a single
 /// output element. The radix-2 inverse FFT over the same norm-1 torus does
-/// it in O(m log m) (libs/fri/fft.zig) and is the same transform the STARK
+/// it in O(m log m) (libs/torus/fft.zig) and is the same transform the STARK
 /// prover already uses for its LDE, so the two can no longer disagree
 /// about layout conventions.
 fn interpolateToCoeffs(allocator: std.mem.Allocator, values: []const Fp2, log_final: u6) Error![]Fp2 {

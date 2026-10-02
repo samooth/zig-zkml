@@ -15,7 +15,7 @@ const zf = @import("zig-field");
 const air = @import("../air/root.zig");
 const tensor = @import("../tensor/root.zig");
 const transcript = @import("../transcript.zig");
-const domain = @import("../fri/domain.zig");
+const domain = @import("../torus/domain.zig");
 
 pub const Goldilocks = field.Goldilocks;
 pub const Fp2 = fri.Fp2;

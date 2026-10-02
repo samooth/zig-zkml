@@ -46,13 +46,13 @@ production code.
 | # | Where | kind | protection | Guards | Debt |
 |---|---|---|---|---|---|
 | 1 | `libs/field.zig:69` | api | invariant | `mul`: both operands already reduced mod p | no |
-| 2 | `libs/fri/fp2.zig:151` | comptime | invariant | `Goldilocks.p ≡ 3 (mod 4)`, the field property F_{p²}=F_p[i] rests on | no |
-| 3 | `libs/fri/fp2.zig:154` | comptime | invariant | the sqrt-of-−1 constant has zero imaginary part | no |
-| 4 | `libs/fri/fp2.zig:155` | comptime | invariant | …and real part exactly −1 | no |
-| 5 | `libs/fri/domain.zig:75` | comptime | invariant | `findGenerator`: search hit has norm 1 | no |
-| 6 | `libs/fri/domain.zig:77` | comptime | invariant | …and order 2⁶⁰, i.e. it generates the torus | no |
-| 7 | `libs/fri/domain.zig:135` | internal | invariant | `fill`: buffer length matches the domain size | no |
-| 8 | `libs/fri/domain.zig:164` | internal | invariant | `root`: the loop bound stays in range | no |
+| 2 | `libs/torus/fp2.zig:151` | comptime | invariant | `Goldilocks.p ≡ 3 (mod 4)`, the field property F_{p²}=F_p[i] rests on | no |
+| 3 | `libs/torus/fp2.zig:154` | comptime | invariant | the sqrt-of-−1 constant has zero imaginary part | no |
+| 4 | `libs/torus/fp2.zig:155` | comptime | invariant | …and real part exactly −1 | no |
+| 5 | `libs/torus/domain.zig:75` | comptime | invariant | `findGenerator`: search hit has norm 1 | no |
+| 6 | `libs/torus/domain.zig:77` | comptime | invariant | …and order 2⁶⁰, i.e. it generates the torus | no |
+| 7 | `libs/torus/domain.zig:135` | internal | invariant | `fill`: buffer length matches the domain size | no |
+| 8 | `libs/torus/domain.zig:164` | internal | invariant | `root`: the loop bound stays in range | no |
 | 9 | `libs/stark/root.zig:674` | internal | invariant | `honestTrace`: the transcript accumulator closes back to zero | no |
 | 10 | `libs/stark/barrel.zig:164` | api | invariant | `cfg.amount_bits >= 2` is a compile-time constant, not caller data | no |
 | 11 | `libs/stark/float_ref.zig:138` | api | invariant | `multiply`: product is at least the implicit bit squared | no |

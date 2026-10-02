@@ -360,7 +360,7 @@ worth its green if you have watched it go red on the defect it names.**
 The `u5`/`u6` sites are a different matter and are mostly done: `@as(usize, 1)
 << log_n` needs `u5` of shift on wasm32 and `u6` on native, and `@intCast` on
 the shift amount infers whichever the destination needs, so the destination
-does not enter the library. `prove` and `stark` are done; `libs/fri/domain.zig`
+does not enter the library. `prove` and `stark` are done; `libs/torus/domain.zig`
 is done; **the two that remain in `libs/fri/root.zig` wait on the architecture
 decision**, so the sweep list cannot reach zero until that is settled — by
 either two `@intCast`s or deleting the file.

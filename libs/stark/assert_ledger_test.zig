@@ -127,7 +127,7 @@ test "no row in the ledger points at a line that is not an assert" {
     var lines = std.mem.splitScalar(u8, ledger, '\n');
     var rows: usize = 0;
     while (lines.next()) |line| {
-        // Rows look like: | 7 | `libs/fri/domain.zig:80` | ...
+        // Rows look like: | 7 | `libs/torus/domain.zig:80` | ...
         const tick = std.mem.indexOf(u8, line, "`") orelse continue;
         const rest = line[tick + 1 ..];
         const tick2 = std.mem.indexOfScalar(u8, rest, '`') orelse continue;

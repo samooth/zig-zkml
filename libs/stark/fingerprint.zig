@@ -39,7 +39,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const fp2_mod = @import("../fri/fp2.zig");
+const fp2_mod = @import("../torus/fp2.zig");
 pub const Fp2 = fp2_mod.Fp2;
 
 pub const Error = error{

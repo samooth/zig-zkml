@@ -37,6 +37,7 @@ _fri_check_fidelity() {
     sed -e 's|@import("\./field\.zig")|@import("../field.zig")|' \
         -e 's|@import("\./merkle\.zig")|@import("../merkle.zig")|' \
         -e 's|@import("\./transcript\.zig")|@import("../transcript.zig")|' \
+        -e 's|@import("\./\([a-z0-9]*\)\.zig")|@import("../torus/\1.zig")|' \
         "$_f" > "$_f.renorm.zig"
     diff "$_f.renorm.zig" "$_orig" > /dev/null || {
         echo "ABORTO: $(basename "$_orig") difiere del original mas alla de los imports" >&2
@@ -56,16 +57,25 @@ stage_fri() {
     cp "$ROOT/libs/field.zig" "$_stage/field.zig"
     cp "$ROOT/libs/merkle.zig" "$_stage/merkle.zig"
     cp "$ROOT/libs/transcript.zig" "$_stage/transcript.zig"
+    # root.zig sigue en libs/fri/ —es el FRI, lo unico que queda ahi— y los
+    # otros tres se fueron a libs/torus/. El bucle tiene que decir de donde sale
+    # cada uno; dar por supuesto que comparten directorio fue lo que rompio esto
+    # en la primera pasada, y lo cazaron las tres puertas que leen rutas.
     for f in root domain fft; do
+        case "$f" in
+            root) src="$ROOT/libs/fri/root.zig" ;;
+            *)     src="$ROOT/libs/torus/$f.zig" ;;
+        esac
         sed -e 's|@import("../field\.zig")|@import("./field.zig")|' \
             -e 's|@import("../merkle\.zig")|@import("./merkle.zig")|' \
             -e 's|@import("../transcript\.zig")|@import("./transcript.zig")|' \
-            "$ROOT/libs/fri/$f.zig" > "$_stage/$f.zig"
+            -e 's|@import("../torus/\([a-z0-9]*\)\.zig")|@import("./\1.zig")|' \
+            "$src" > "$_stage/$f.zig"
     done
     sed -e 's|@import("../field\.zig")|@import("./field.zig")|' \
         -e 's|@import("../merkle\.zig")|@import("./merkle.zig")|' \
         -e 's|@import("../transcript\.zig")|@import("./transcript.zig")|' \
-        "$ROOT/libs/fri/fp2.zig" > "$_stage/fp2.zig"
+        "$ROOT/libs/torus/fp2.zig" > "$_stage/fp2.zig"
 
     # El lado del pin, al lado del nuestro, con la unica diferencia de la ruta
     # del import. Sin envoltorio: un fichero no puede pertenecer a dos modulos,
@@ -80,7 +90,11 @@ stage_fri() {
     fi
 
     for f in root domain fft fp2; do
-        _fri_check_fidelity "$_stage/$f.zig" "$ROOT/libs/fri/$f.zig" || return 1
+        case "$f" in
+            root) orig="$ROOT/libs/fri/root.zig" ;;
+            *)     orig="$ROOT/libs/torus/$f.zig" ;;
+        esac
+        _fri_check_fidelity "$_stage/$f.zig" "$orig" || return 1
     done
     for f in field merkle transcript; do
         diff "$_stage/$f.zig" "$ROOT/libs/$f.zig" > /dev/null || {

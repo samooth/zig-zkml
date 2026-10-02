@@ -78,7 +78,7 @@ test {
     _ = @import("libs/statement/root.zig");
     _ = @import("libs/attestation.zig");
     _ = @import("libs/api.zig");
-    _ = @import("libs/fri/fp2.zig");
+    _ = @import("libs/torus/fp2.zig");
     _ = @import("libs/stark/expr.zig");
     _ = @import("libs/stark/commit.zig");
     _ = @import("libs/stark/root.zig");
@@ -109,7 +109,7 @@ test {
     _ = @import("libs/stark/gemm_chunk_test.zig");
     _ = @import("libs/stark/quant_test.zig");
     _ = @import("libs/stark/gemm_test.zig");
-    _ = @import("libs/fri/domain.zig");
+    _ = @import("libs/torus/domain.zig");
     _ = @import("libs/fri/root.zig");
     _ = @import("libs/air/root.zig");
     _ = @import("libs/gadgets/gemm/root.zig");

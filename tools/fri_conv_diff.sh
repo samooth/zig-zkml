@@ -21,12 +21,12 @@ STAGE="$ROOT/.zig-cache/fri_conv"
 mkdir -p "$STAGE"
 cp "$ROOT/libs/field.zig" "$STAGE/field.zig"
 sed 's|@import("../field.zig")|@import("./field.zig")|' \
-  "$ROOT/libs/fri/fp2.zig" > "$STAGE/fp2.zig"
+  "$ROOT/libs/torus/fp2.zig" > "$STAGE/fp2.zig"
 
 # La copia solo puede diferir en la linea del import.
 sed 's|@import("./field.zig")|@import("../field.zig")|' "$STAGE/fp2.zig" > "$STAGE/fp2.renorm.zig"
 sed 's|@import("./field.zig")|@import("../field.zig")|' "$STAGE/field.zig" > "$STAGE/field.renorm.zig"
-if ! diff "$STAGE/fp2.renorm.zig" "$ROOT/libs/fri/fp2.zig" > /dev/null; then
+if ! diff "$STAGE/fp2.renorm.zig" "$ROOT/libs/torus/fp2.zig" > /dev/null; then
   echo "ABORTO: la copia de fp2.zig difiere del original mas alla del import" >&2
   exit 1
 fi
