@@ -176,6 +176,51 @@ Adapter gates: `zig build vllm-adapter`, `zig build llama-adapter`,
 `zig build kt-adapter`. The zig-ai adapter needs no separate step — it is a
 module import and runs inside `zig build test`.
 
+## Status
+
+This repository is a **chain** — five adapters, a model compiler, a C
+interface, and a proof system — and it is the only one of the three that
+describes a whole chain rather than one component. So the useful thing to
+publish is which links are real. Five states, borrowed from zig-zk because its
+boxes have commit seals and beat anything invented here:
+
+- **done** — implemented, and a gate that goes red if it stops holding.
+- **measured** — a number exists, and an instrument reproduces it on demand.
+- **partial** — some of it holds; the box says which part.
+- **not started** — nothing to check. Negative states are free: no gate needed
+  to prove something is absent.
+- **decision pending** — someone has to choose before it can be built.
+
+No box carries a number unless a gate produces that number. Every **done**
+carries the step that would catch its absence.
+
+| Link | State | Gate or evidence |
+|---|---|---|
+| Weights attestation, C ABI | done | `zig build abi`, `zig build verify` |
+| Witness session, ABI v2 | done | `zig build test` |
+| Deterministic sampling | done | `zkml_transcript_seed` in the ABI, consumed by adapters |
+| M61 field | done, **ours** | `zig build field-diff` — 17,344 checks vs the pinned M61 |
+| Fp2 ↔ Torus61 identity | measured | `zig build fri-conv-diff` — 484 checks, byte layout, canonicality |
+| FRI composition | measured, **now the pin's** | `zig build fri-diff` — 108 checks over 7 parameter points |
+| Domain cost | measured | `zig build domain-cost` — prover ~4× per doubling, verifier flat |
+| STARK backend + GEMM AIR | partial | backend done; real RMSNorm/subnormal AIR not written |
+| Fingerprint AIR / FRI | partial | arithmetic core done and commitment order enforced; AIR and tile aggregation pending |
+| `zkml_prove_layer` / `zkml_verify_layer` | not started | pending in the Roadmap |
+| vLLM adapter | done | `zig build vllm-adapter` (CI) |
+| zig_ai adapter | done | inside `zig build test` |
+| llama.cpp adapter | done | `zig build llama-adapter` (local; needs `../llama.cpp`) |
+| ktransformers adapter | done | `zig build kt-adapter` (local; needs `../ktransformers-zig`) |
+| wasm32-freestanding | partial | `zig build wasm-consumer` passes for a consumer; `zig build wasm-test-sweep` pins what does not |
+| Docs | done | `zig build doc-paths` — every path cited in every `.md` resolves |
+| Real-engine witness | not started | — |
+| Per-format weight layer, Q8_0 scale provenance | not started | — |
+| Multi-block recursion (F4) | decision pending | scope it only after F2 on native-path verifiability |
+
+The states a table like this can get wrong are the negative ones, so they are
+the cheapest to keep honest: "not started" is checkable by anyone opening the
+directory. What is not free is a **done**, and that is why every one of them
+above names the step that would go red.
+
 ## Building and testing
 
 ```bash

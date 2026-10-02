@@ -1,5 +1,11 @@
 # zig-ai adapter (same-language, no FFI)
 
+> **Status: done.** Gate: `zig build test` — runs in CI, inside the main suite.
+> A **done** is a claim about a gate, not an opinion: it means the step
+> exists and goes red if the adapter stops holding. Stated per adapter
+> because two of these four gates are local only, and a single "all four
+> done" would hide which two nobody re-checks automatically.
+
 Stage 2 of [`PLAN_MULTI_ENGINE.md`](../../docs/PLAN_MULTI_ENGINE.md). zig-ai and
 zig-zkml are both Zig 0.16.0 stable, so the adapter is a **module import** —
 no C ABI, no FFI, no CMake. zig-ai is a sibling repo and is **not** edited

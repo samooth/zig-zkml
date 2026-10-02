@@ -1,5 +1,11 @@
 # llama.cpp attestation adapter (zero-fork)
 
+> **Status: done.** Gate: `zig build llama-adapter` — local only: needs `../llama.cpp` checked out.
+> A **done** is a claim about a gate, not an opinion: it means the step
+> exists and goes red if the adapter stops holding. Stated per adapter
+> because two of these four gates are local only, and a single "all four
+> done" would hide which two nobody re-checks automatically.
+
 Stage 1 of [`PLAN_MULTI_ENGINE.md`](../../docs/PLAN_MULTI_ENGINE.md). Streams every
 tensor of a GGUF file into zig-zkml's weights attestation
 (`zkml_attestor_*`) and exposes the 32-byte Merkle root. Uses only the

@@ -6,15 +6,22 @@ contract, `include/zkml_c.h` ABI). Adapters live **inside this repo**;
 upstream engine repos are never edited — their required patches/diffs are
 documented as READMEs next to the adapter code.
 
-| Adapter | Stage | Mechanism |
-|---|---|---|
-| `llama_cpp/` | 1 ✅ | Zero-fork wrapper over the public `gguf.h` reader (streamed tensors → attestor) |
-| `zig_ai/` | 2 ✅ | Direct Zig module import; `TensorSource` over `GgufFile` → attestor; `MetricHooks` → witness |
-| `vllm/` | 3 ✅ | `ctypes` over `libzkml.so`; `zkml_attested` load format; witness recorder |
-| `ktransformers/` | 4 ✅ | Reference C glue: `kt_zkml_*` → `zkml_*`, sized by `kt_type_row_bytes` |
+| Adapter | Stage | Mechanism | Status | Gate |
+|---|---|---|---|---|
+| `llama_cpp/` | 1 | Zero-fork wrapper over the public `gguf.h` reader (streamed tensors → attestor) | **done** | `zig build llama-adapter` (local) |
+| `zig_ai/` | 2 | Direct Zig module import; `TensorSource` over `GgufFile` → attestor; `MetricHooks` → witness | **done** | `zig build test` (CI) |
+| `vllm/` | 3 | `ctypes` over `libzkml.so`; `zkml_attested` load format; witness recorder | **done** | `zig build vllm-adapter` (CI) |
+| `ktransformers/` | 4 | Reference C glue: `kt_zkml_*` → `zkml_*`, sized by `kt_type_row_bytes` | **done** | `zig build kt-adapter` (local) |
 
 All four ship a negative test and are cross-checked against
 `tools/verify_weights.py`.
+
+Two of these gates are **local only** — `llama-adapter` and `kt-adapter` need
+`../llama.cpp` and `../ktransformers-zig` checked out outside this repository,
+so CI cannot run them. They pass on a machine that has the siblings, so "CI
+cannot run them" is not "they are broken". That is also why the status is
+per adapter with its gate, rather than one "all four done" that would hide
+which two nobody re-checks automatically.
 
 Staging, per-file work items and gates: [`../docs/PLAN_MULTI_ENGINE.md`](../docs/PLAN_MULTI_ENGINE.md).
 

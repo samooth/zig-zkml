@@ -1,5 +1,11 @@
 # ktransformers-zig reference glue (Stage 4)
 
+> **Status: done.** Gate: `zig build kt-adapter` — local only: needs `../ktransformers-zig` checked out and built.
+> A **done** is a claim about a gate, not an opinion: it means the step
+> exists and goes red if the adapter stops holding. Stated per adapter
+> because two of these four gates are local only, and a single "all four
+> done" would hide which two nobody re-checks automatically.
+
 The **reference adapter**: the simplest possible mapping from an engine's
 C ABI to the engine-agnostic core, used to calibrate the checklist that the
 llama.cpp, zig-ai and vLLM adapters are measured against. The engine repo is
