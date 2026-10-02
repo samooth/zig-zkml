@@ -12,10 +12,12 @@ const field = @import("../field.zig");
 const fri = @import("../fri/root.zig");
 const fri_pin = @import("zig-fri");
 const zf = @import("zig-field");
+const TorusDom = fri_pin.torus.TorusDomain(Fp2, zf.M61);
 const air = @import("../air/root.zig");
 const tensor = @import("../tensor/root.zig");
 const transcript = @import("../transcript.zig");
 const domain = @import("../torus/domain.zig");
+const torus = @import("../torus/root.zig");
 
 pub const Goldilocks = field.Goldilocks;
 pub const Fp2 = fri.Fp2;
@@ -66,7 +68,7 @@ pub fn prove(
 ) !Proof {
     const evals = try flattenToFp2(allocator, trace);
     defer allocator.free(evals);
-    return fri.prove(allocator, tr, evals, config);
+    return fri_pin.proveOn(Fp2, TorusDom, allocator, tr, evals, torus.toPin(fri_pin, config));
 }
 
 /// Verify a FRI proof against the trace shape. Constraint checking
@@ -77,7 +79,7 @@ pub fn verify(
     config: Config,
     tr: anytype,
 ) !bool {
-    return fri.verify(tr, proof, config);
+    return fri_pin.verifyOn(Fp2, TorusDom, tr, proof, torus.toPin(fri_pin, config));
 }
 
 /// Map a query pair_index to (row, col) in the trace matrix.

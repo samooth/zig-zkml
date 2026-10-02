@@ -423,4 +423,8 @@ pub fn main() !void {
     } else {
         std.debug.print("RESULTADO: HAY DIFERENCIAS — la composicion no coincide\n", .{});
     }
+    // El paso de build se queda con el codigo de salida del proceso, asi que
+    // imprimir "HAY DIFERENCIAS" y salir con 0 es una puerta en verde sobre un
+    // fallo. Devolver un error es lo que el proceso traduce en exit code.
+    if (failures > 0) return error.DifferentialFound;
 }

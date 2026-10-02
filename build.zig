@@ -20,6 +20,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "zig-merkle", .module = zmerkle_mod },
+            // El FRI y el campo del pin, para que el codigo de produccion pueda
+            // apuntar al pin sin depender de como este cableado fri_audit: antes
+            // solo lo alcanzaba la auditoria, asi que migrar prove/verify
+            // exigia tambien tocar build.zig.
+            .{ .name = "zig-fri", .module = algebra_dep.module("zig-fri") },
+            .{ .name = "zig-field", .module = field_mod },
         },
     });
 
@@ -243,12 +249,6 @@ pub fn build(b: *std.Build) void {
                         .optimize = .ReleaseSafe,
                         .imports = &.{
                             .{ .name = "zig-merkle", .module = zmerkle_mod },
-                            // El FRI y el campo del pin, para que el codigo de produccion pueda
-                            // apuntar al pin sin depender de como este cableado fri_audit. Antes
-                            // solo lo alcanzaba la auditoria, asi que migrar prove/verify
-                            // exigia tambien tocar build.zig.
-                            .{ .name = "zig-fri", .module = algebra_dep.module("zig-fri") },
-                            .{ .name = "zig-field", .module = field_mod },
                         },
                     }),
                 },

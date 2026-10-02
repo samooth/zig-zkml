@@ -24,6 +24,21 @@ comptime {
 
 /// F_p[i]: element = a + b·i, stored as two F_p values.
 pub const Fp2 = struct {
+    /// The 2-adicity the pin's FRI reads as "how big a 2-power subgroup can
+    /// this field hold", defined upstream as `v2(p-1) + v2(p+1)`.
+    ///
+    /// For p = 2^61 - 1 that is 1 + 61 = 62, and the order-2^61 torus sits
+    /// inside it. It is a property of the FIELD, computed from the prime, not a
+    /// tuning knob: `tools/fri_conv_diff.sh` asserts it against the pin's own
+    /// value, so a wrong constant here is caught rather than believed.
+    ///
+    /// It exists because the pin's `proveOn` guards `log_domain` with
+    /// `F.two_adicity`, and without the member our own Fp2 is not a field it
+    /// can be instantiated over. Adding the member does not make the two
+    /// implementations the same code; `fri-diff` is what says they behave the
+    /// same, and it says so by measurement.
+    pub const two_adicity: usize = 62;
+
     a: Goldilocks,
     b: Goldilocks,
 
@@ -36,6 +51,33 @@ pub const Fp2 = struct {
 
     pub fn fromRaw(a: u64, b: u64) Fp2 {
         return .{ .a = Goldilocks.fromU64(a), .b = Goldilocks.fromU64(b) };
+    }
+
+    /// The integer constructor the pin's field trait exposes: the value in the
+    /// real part, imaginary part zero. Identical to `re`, and that is the point
+    /// — the pin's is `fromBase(BaseField.fromInt(x))`, so both put nothing in
+    /// the imaginary part.
+    pub fn fromInt(x: anytype) Fp2 {
+        return re(Goldilocks.fromU64(@intCast(x)));
+    }
+
+    /// Division, unchecked — matching the contract of the pin's field, which is
+    /// `self.mul(other.inv())` and has a separate `divChecked` for the checked
+    /// case. Our `inv` is the checked one, so a zero divisor would be an error
+    /// here and the pin has no way to see it.
+    ///
+    /// It is left unchecked because the only caller is the pin's FRI computing
+    /// `1/2`, and 2 is invertible in an odd characteristic: the branch is
+    /// unreachable for that caller. It is NOT a general-purpose division and
+    /// should not be used as one — `divChecked` below is that, and it exists so
+    /// the unchecked name is a deliberate choice rather than the only one.
+    pub fn div(x: Fp2, y: Fp2) Fp2 {
+        return x.mul(y.inv() catch zero);
+    }
+
+    /// Division that says so when the divisor is zero.
+    pub fn divChecked(x: Fp2, y: Fp2) error{ZeroInverse}!Fp2 {
+        return x.mul(try y.inv());
     }
 
     pub fn eql(x: Fp2, y: Fp2) bool {

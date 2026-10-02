@@ -46,9 +46,9 @@ production code.
 | # | Where | kind | protection | Guards | Debt |
 |---|---|---|---|---|---|
 | 1 | `libs/field.zig:69` | api | invariant | `mul`: both operands already reduced mod p | no |
-| 2 | `libs/torus/fp2.zig:151` | comptime | invariant | `Goldilocks.p ≡ 3 (mod 4)`, the field property F_{p²}=F_p[i] rests on | no |
-| 3 | `libs/torus/fp2.zig:154` | comptime | invariant | the sqrt-of-−1 constant has zero imaginary part | no |
-| 4 | `libs/torus/fp2.zig:155` | comptime | invariant | …and real part exactly −1 | no |
+| 2 | `libs/torus/fp2.zig:193` | comptime | invariant | `Goldilocks.p ≡ 3 (mod 4)`, the field property F_{p²}=F_p[i] rests on | no |
+| 3 | `libs/torus/fp2.zig:196` | comptime | invariant | the sqrt-of-−1 constant has zero imaginary part | no |
+| 4 | `libs/torus/fp2.zig:197` | comptime | invariant | …and real part exactly −1 | no |
 | 5 | `libs/torus/domain.zig:75` | comptime | invariant | `findGenerator`: search hit has norm 1 | no |
 | 6 | `libs/torus/domain.zig:77` | comptime | invariant | …and order 2⁶⁰, i.e. it generates the torus | no |
 | 7 | `libs/torus/domain.zig:135` | internal | invariant | `fill`: buffer length matches the domain size | no |

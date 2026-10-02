@@ -83,6 +83,11 @@ fn to_torus(x: Fp2) Q {
 /// as two names describing one object.
 const NB = @divExact(Q.NUM_BYTES, 2);
 
+/// p + 1 = 2^61: the order of the norm-1 torus, and the largest domain our
+/// Domain can be asked for. Copied as a number because the pin exposes no
+/// constant for it and the check in `validate_two_adicity` needs one.
+const torus_log_order: usize = 61;
+
 fn byte_layout_is_c0_then_c1(a: u64, b: u64) bool {
     const full = Q.new(asTorus(a), asTorus(b)).toBytes();
     const lo = Torus.fromInt(a).toBytes();
@@ -152,6 +157,30 @@ fn validate_decomposition() !void {
 /// a `>` en la comparacion de `b` daba CERO discrepancias, porque nunca se
 /// alimentaba una codificacion no canonica. Una propiedad que el codigo
 /// afirma y el instrumento no mide es una propiedad documentada, no verificada.
+/// Our Fp2's `two_adicity` against the pin's.
+///
+/// `two_adicity` is a member this file's own subject needed: the pin's
+/// `proveOn` guards `log_domain` with `F.two_adicity`, and without it our Fp2
+/// is not a field the pin can be instantiated over. The value is
+/// `v2(p-1) + v2(p+1)` = 1 + 61 = 62 — arithmetic on the prime, but still a
+/// number somebody typed, and a wrong one would be invisible: the FRI over ours
+/// and the FRI over the pin's would then guard DIFFERENT domains, and every
+/// differential between them would be measured over a range neither of them
+/// actually allows.
+///
+/// This is what makes it a measurement instead of a constant. Verified by
+/// mutation: 32 instead of 62 gives discrepancies and prints both values.
+fn validate_two_adicity() void {
+    note("two_adicity: igual que el del pin", Fp2.two_adicity == Q.two_adicity);
+    if (Fp2.two_adicity != Q.two_adicity) {
+        std.debug.print("    mio={d} pin={d}\n", .{ Fp2.two_adicity, Q.two_adicity });
+    }
+    // And it must hold the torus we actually use: the order-2^61 subgroup needs
+    // a field admitting a 2-power of at least that size, which is the whole
+    // reason our Domain exists.
+    note("two_adicity >= torus_log_order", Fp2.two_adicity >= torus_log_order);
+}
+
 fn validate_canonicality() !void {
     const p: u64 = @intCast(G.p);
 
@@ -251,6 +280,7 @@ pub fn main() !void {
     const p: u64 = (1 << 61) - 1;
     try validate_decomposition();
     try validate_canonicality();
+    validate_two_adicity();
 
     // The corpus is chosen against where a broken conversion hides: `y != 0`
     // everywhere except one case (with `y = 0` a conversion could swap `a`
@@ -320,4 +350,8 @@ pub fn main() !void {
     } else {
         std.debug.print("RESULTADO: HAY DIFERENCIAS — la conversion no es la identidad\n", .{});
     }
+    // El paso de build se queda con el codigo de salida del proceso, asi que
+    // imprimir "HAY DIFERENCIAS" y salir con 0 es una puerta en verde sobre un
+    // fallo. Devolver un error es lo que el proceso traduce en exit code.
+    if (failures > 0) return error.DifferentialFound;
 }
