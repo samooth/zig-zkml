@@ -109,9 +109,13 @@ Todo lo de esta sección lo exige la respuesta por fingerprint, y casi todo lo e
       > - Quedan **(a) o (b)**, y **Poseidon2 sale favorecido por una reason que no
       >   es de la 2.3**: es tambien lo que un Merkle necesita para ocultar en campo
       >   pequeno, y es la unica decision de este plan que sirve a dos partes caras.
-      > - Pero Poseidon2 **no da el blinding**, y sin blinding no hay ZK. El pin no
-      >   tiene ni blinding ni compromiso ocultable: es Merkle + Blake3 sobre
-      >   Goldilocks 2^61-1.
+      > - Pero Poseidon2 **no da el enmascarado**, y sin enmascarado no hay ZK. El
+      >   pin no lo tiene: compromete con Merkle + Blake3 sobre `2^61-1`, sin
+      >   ningun blinding.
+      > - **Correccion (`12222ef`):** la compresion del Merkle vive fuera de la
+      >   traza, asi que no necesita gadget de Poseidon2 — ver
+      >   `docs/decisions/ADR-0004-pesos-ocultos.md`. Que enmascarar baste sin
+      >   cambiar el hash esta **sin medir**.
       >
       > **Antes de esta casilla hay que resolver quien implementa el ZK FRI**
       > (aportarlo al pin, o conservar el nuestro y extenderlo), porque las dos

@@ -28,7 +28,7 @@ difícil: la maquinaria no está.
 | requisito para (b) | estado medido |
 |---|---|
 | blinding del cociente y de las aperturas | **ausente** — `grep -rin 'blinding\|zero.knowledge\|deep.fri\|hiding'` sobre `libs/` del pin: nada |
-| compromiso que oculte | **Merkle + Blake3** (`libs/fri/src/root.zig:88-98`) |
+| compromiso que oculte | **Merkle + Blake3** — el pin lo declara en su propio `root.zig` de FRI; aqui, `libs/fri/root.zig` |
 | campo | Goldilocks p = 2⁶¹−1, **campo pequeño**, FRI sobre F_p² |
 | transcript ZK | el del pin se describe a sí mismo como *«house design, not a specification»* |
 
@@ -36,18 +36,55 @@ El punto que más pesa: **campo pequeño + Merkle-BLAKE3 no oculta.** Esa es
 exactamente la razón por la que los STARK de campo pequeño necesitan un hash
 amigable para la ocultación. El de aquí es BLAKE3.
 
-## La convergencia que conviene ver
+## Corrección (2026-10-03) — el papel de Poseidon2 era este, y era demasiado
 
-**Poseidon2 aparece en dos sitios y sirve a los dos:**
+Este documento afirmaba que Poseidon2 «es lo que un Merkle necesita para ocultar
+en campo pequeño». **Medido, y no es así.**
 
-1. es la opción **(b)** del puente de la 2.3 — un hash compatible con el campo;
-2. es lo que un Merkle necesita para **ocultar** en campo pequeño.
+```
+grep -rn 'Blake3\|hashBytes' libs/stark/*.zig libs/air/*.zig
+  → libs/stark/commit.zig, y solo ahí
+```
 
-Elegir Poseidon2 por la ligadura también compra la mitad del costo de la
-privacidad. Es el único punto donde dos partes caras del plan comparten una
-decisión, y por eso la 2.3 se tiene que responder con esto en mente.
+**La compresión del Merkle vive fuera de la traza.** Nunca aparece como
+constraint de un AIR, porque no hace falta: el verificador recorre el árbol
+directamente. De ahí se cae la razón por la que se elige Poseidon2 en un ZK
+—que es su **gadget**, el coste de verificar la hash dentro del circuito—, y
+aquí ese coste no se paga.
 
-Lo que **no** se compra: el blinding. Eso no lo da ningún hash.
+Y la ocultación puede venir de otro sitio. Si el prover compromete a
+`f + Z·h` con `h` uniforme y secreto —el enmascarado estándar—, las hojas ya son
+uniformes, e invertir Blake3 sobre 2⁶¹ candidatos es inviable. **Enmascarar puede
+bastar sin cambiar el hash.**
+
+Lo que queda en pie de la versión anterior: **el enmascarado sí hace falta, y
+ningún hash lo da.** Eso es lo que no existe hoy.
+
+**No se ha medido todavía** si enmascarar basta sin Poseidon2, ni a qué coste en
+headroom de grado. Queda como `DECISIÓN` y no como afirmación, que es la
+diferencia entre las dos versiones de esta sección.
+
+## Como se implementa (decision del propietario, 2026-10-03)
+
+**«De momento implementalo tu; ya lo portaremos y adaptaremos.»**
+
+Se conserva `libs/fri/root.zig` y se extiende con ZK. **El borrado queda
+cancelado**, y con el la demolición de `tools/fri_diff.{zig,sh}` y el paso
+`fri-diff` de `build.zig`, que solo existian para comparar contra el pin.
+
+Lo que se decide es mal el primer paso, asi que se escribe antes de codificar:
+
+| paso | que es | como se mide |
+|---|---|---|
+| 1 | **headroom de grado del enmascarado**:.width del LDE | ¿con que blowup cabe `f + Z·h`? |
+| 2 | commitment enmascarado, hoja a hoja | el commitment no determina la columna |
+| 3 | enmascarar el cociente | la apertura no filtra residuos |
+| 4 | transcript ZK | simulable con trampa |
+
+El paso 1 va primero porque es el unico cuyo resultado puede cambiar los otros:
+si el enmascarado no cabe en el blowup actual, la conclusion no es «añadir
+enmascarado» sino «cambiar de geometria», y eso se decide antes de escribir el
+resto.
 
 ## Lo que esta decisión abre
 
