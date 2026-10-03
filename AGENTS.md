@@ -242,7 +242,9 @@ written rule is still the contract, exactly as the language policy is.
 
 ## Gates
 
-**Six run in CI**, and a report that lists gates lists these six:
+**Six run in CI as blocking gates**, and a report that lists gates lists these
+six. `zig build test -Doptimize=ReleaseFast` is the seventh and is run locally
+with every change; the CI job runs the debug one.
 
 ```sh
 zig build fmt
@@ -254,13 +256,18 @@ zig build spike
 zig build vllm-adapter
 ```
 
-**Three more run here and are not in that list, for three different reasons:**
+**Eight more run here, and seven of them in CI as `continue-on-error` jobs** —
+the weekly `wasm-portability` and `differentials` jobs. They are non-blocking on
+purpose, and being non-blocking is exactly why they are written down here:
 
 ```sh
 zig build bench-fingerprint   # local: shells out to a full second build
 zig build wasm-consumer       # local + weekly CI, non-blocking
 zig build wasm-test-sweep     # local + weekly CI, non-blocking
+zig build doc-paths           # local + weekly CI, non-blocking
+zig build masking-mutation    # local + weekly CI, non-blocking
 zig build field-diff          # local + weekly CI, non-blocking
+zig build domain-cost         # local + weekly CI, non-blocking
 zig build fri-conv-diff       # local + weekly CI, non-blocking
 zig build fri-diff            # local + weekly CI, non-blocking
 ```
@@ -365,7 +372,9 @@ is done; **the two that remain in `libs/fri/root.zig` wait on the architecture
 decision**, so the sweep list cannot reach zero until that is settled — by
 either two `@intCast`s or deleting the file.
 
-`bench-fingerprint` is a real gate and it does run here, but `.github/workflows/ci.yml`
+`doc-paths` and `masking-mutation` run in the weekly `differentials` job and not
+in the blocking six. `bench-fingerprint` is a real gate and it does run here,
+but `.github/workflows/ci.yml`
 never calls it — `grep -c bench-fingerprint .github/workflows/ci.yml` is 0. It is
 listed separately precisely because a report that says "the seven gates" against
 a CI that runs six is a false claim, and the ratios it produces

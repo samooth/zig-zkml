@@ -328,6 +328,13 @@ pub fn build(b: *std.Build) void {
     );
     doc_paths_step.dependOn(&doc_paths.step);
 
+    const masking_mut = b.addSystemCommand(&.{ "bash", "tools/masking_mutation.sh" });
+    const masking_mut_step = b.step(
+        "masking-mutation",
+        "Las pruebas de enmascarado tienen que poder fallar, y se comprueba",
+    );
+    masking_mut_step.dependOn(&masking_mut.step);
+
     for (differentials) |d| {
         const run = b.addSystemCommand(&.{ "bash", d.script });
         run.step.dependOn(b.getInstallStep());

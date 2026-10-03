@@ -34,6 +34,7 @@ pub const gemm_air = @import("libs/stark/gemm_air.zig");
 pub const gemm_chunk = @import("libs/stark/gemm_chunk.zig");
 pub const quant_binding = @import("libs/stark/quant_binding.zig");
 pub const chunk_binding = @import("libs/stark/chunk_binding.zig");
+pub const masking = @import("libs/stark/masking.zig");
 pub const logup = @import("libs/stark/logup.zig");
 
 comptime {
@@ -105,6 +106,7 @@ test {
     _ = @import("libs/stark/gemm_air.zig");
     _ = @import("libs/stark/gemm_chunk.zig");
     _ = @import("libs/stark/chunk_binding.zig");
+    _ = @import("libs/stark/masking.zig");
     _ = @import("libs/stark/chunk_binding_test.zig");
     _ = @import("libs/stark/gemm_chunk_test.zig");
     _ = @import("libs/stark/quant_test.zig");
