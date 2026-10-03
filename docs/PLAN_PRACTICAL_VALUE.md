@@ -117,6 +117,11 @@ Todo lo de esta sección lo exige la respuesta por fingerprint, y casi todo lo e
       >   `docs/decisions/ADR-0004-pesos-ocultos.md`. Que enmascarar baste sin
       >   cambiar el hash esta **sin medir**.
       >
+      > - **La composición DEEP no está escrita y no es de memoria.**
+      >   `ADR-0005` cuenta qué se intentó, por qué la construcción que se iba a
+      >   escribir era falsa, y cuál es el paper correcto. La referencia que se
+      >   tenía anotada — `arXiv 1904.00343` — es un paper de astrofísica.
+      >
       > **Antes de esta casilla hay que resolver quien implementa el ZK FRI**
       > (aportarlo al pin, o conservar el nuestro y extenderlo), porque las dos
       > respuestas dan AIRs distintos. Decision del propietario.
